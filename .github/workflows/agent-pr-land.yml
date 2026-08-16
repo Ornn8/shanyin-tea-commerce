@@ -21,7 +21,7 @@ jobs:
       || (github.event_name == 'workflow_run'
         && contains(fromJSON(vars.DSH_AUTOMATION_CI_WORKFLOWS), github.event.workflow_run.name)
         && github.event.workflow_run.conclusion == 'success')
-    uses: Ornn8/dsh-agent-automation/.github/workflows/land-pr.yml@f8385c921e555fdd59636d959fac7817b2d1ca86
+    uses: Ornn8/dsh-agent-automation/.github/workflows/land-pr.yml@f79f3d1e5b5d20c4c8639d2a811380ba52cefcf9
     with:
       pull_request_number: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number || github.event.workflow_run.pull_requests[0].number || 0 }}
       head_sha: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.head_sha || github.event.workflow_run.head_sha }}
