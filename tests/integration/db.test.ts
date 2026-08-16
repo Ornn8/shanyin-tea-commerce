@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '@/lib/prisma';
-import { getProductBySlug, getProductsBySkus, listCategories, listProducts, searchProducts } from '@/lib/products';
+import { getProductBySlug, getProductsBySkus, listCategories, listProducts, queryProducts } from '@/lib/products';
 import { LOCALE_IDS } from '@/i18n/registry';
 
 const hasDb = Boolean(process.env.DATABASE_URL);
@@ -67,13 +67,17 @@ describeDb('PostgreSQL + Prisma integration', () => {
     expect(zh[0].productCount).toBe(en[0].productCount);
   });
 
-  it('search matches localized names in the locale of the query', async () => {
-    const enResults = await searchProducts('Longjing', 'en');
-    expect(enResults.some((p) => p.slug === 'spring-longjing')).toBe(true);
-    const zhResults = await searchProducts('龙井', 'zh-CN');
-    expect(zhResults.some((p) => p.slug === 'spring-longjing')).toBe(true);
-    const jaResults = await searchProducts('龍井', 'ja');
-    expect(jaResults.some((p) => p.slug === 'spring-longjing')).toBe(true);
+  it('search matches the active locale’s copy with a deterministic fallback', async () => {
+    const enResults = await queryProducts({ locale: 'en', q: 'Longjing' });
+    expect(enResults.products.some((p) => p.slug === 'spring-longjing')).toBe(true);
+    const zhResults = await queryProducts({ locale: 'zh-CN', q: '龙井' });
+    expect(zhResults.products.some((p) => p.slug === 'spring-longjing')).toBe(true);
+    const jaResults = await queryProducts({ locale: 'ja', q: '龍井' });
+    expect(jaResults.products.some((p) => p.slug === 'spring-longjing')).toBe(true);
+    // Locale-scoped: because spring-longjing HAS zh-CN and ja rows, its
+    // English name must not match those locales (ADR-0004).
+    expect((await queryProducts({ locale: 'zh-CN', q: 'Longjing' })).total).toBe(0);
+    expect((await queryProducts({ locale: 'ja', q: 'Longjing' })).total).toBe(0);
   });
 
   it('detail lookup returns a localized product or null', async () => {

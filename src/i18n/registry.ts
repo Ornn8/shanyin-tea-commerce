@@ -36,6 +36,8 @@ export const OPTIONAL_KEYS: readonly string[] = ['home.announcement'];
 export const MESSAGE_PARAMS: Readonly<Record<string, readonly string[]>> = {
   'search.resultsFor': ['query'],
   'search.noResults': ['query'],
+  'catalog.resultsCount': ['count'],
+  'catalog.pageOf': ['page', 'pages'],
 };
 
 export interface LocaleMeta {

@@ -1,5 +1,52 @@
+/**
+ * Catalog access layer.
+ *
+ * - `listProducts` / `getProductBySlug` / `getProductsBySkus` / `listCategories`
+ *   serve the home page, detail page, and cart.
+ * - `queryProducts` is the server-backed discovery engine behind the catalog
+ *   result pages (`/…/products` and `/…/search`). Its full contract — URL
+ *   parameters, locale-scoped search with a deterministic fallback,
+ *   language-neutral fact filters, sorting, and pagination — is documented in
+ *   docs/adr/0004-catalog-discovery-url-state.md.
+ *
+ * Commerce facts (slugs, SKUs, priceCents, inventory, origin, leaf form,
+ * caffeine level) are language-neutral; only product copy is localized and
+ * picked per locale (ADR-0003).
+ */
 import { prisma } from '@/lib/prisma';
 import { FALLBACK_LOCALE, type LocaleId } from '@/i18n/registry';
+import {
+  CAFFEINE_LEVELS,
+  CATALOG_PAGE_SIZE,
+  CATALOG_SORTS,
+  PRODUCT_FORMS,
+  type CaffeineLevelId,
+  type CatalogSortId,
+  type ProductFormId,
+} from './catalog-options';
+
+export {
+  CAFFEINE_LEVELS,
+  CATALOG_PAGE_SIZE,
+  CATALOG_SORTS,
+  PRODUCT_FORMS,
+  type CaffeineLevelId,
+  type CatalogSortId,
+  type ProductFormId,
+};
+
+/** DB enum → canonical URL id. */
+const FORM_FROM_ENUM: Readonly<Record<string, ProductFormId>> = {
+  LOOSE: 'loose',
+  COMPRESSED: 'compressed',
+};
+
+/** DB enum → canonical URL id. */
+const CAFFEINE_FROM_ENUM: Readonly<Record<string, CaffeineLevelId>> = {
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+};
 
 export interface ProductView {
   id: string;
@@ -8,10 +55,14 @@ export interface ProductView {
   priceCents: number;
   inventory: number;
   origin: string;
+  form: ProductFormId;
+  caffeine: CaffeineLevelId;
   name: string;
   description: string;
   tastingNotes: string;
   category: { slug: string; name: string };
+  /** Language-neutral ranking input (createdAt ascending = featured order). */
+  createdAt: Date;
 }
 
 type ProductRow = Awaited<ReturnType<typeof findProductRow>>[number];
@@ -37,10 +88,13 @@ export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
     priceCents: row.priceCents,
     inventory: row.inventory,
     origin: row.origin,
+    form: FORM_FROM_ENUM[row.form] ?? 'loose',
+    caffeine: CAFFEINE_FROM_ENUM[row.caffeine] ?? 'medium',
     name: loc?.name ?? row.slug,
     description: loc?.description ?? '',
     tastingNotes: loc?.tastingNotes ?? '',
     category: { slug: row.category.slug, name: catLoc?.name ?? row.category.slug },
+    createdAt: row.createdAt,
   };
 }
 
@@ -108,25 +162,128 @@ export async function listCategories(locale: LocaleId): Promise<CategoryView[]> 
   });
 }
 
-export async function searchProducts(query: string, locale: LocaleId): Promise<ProductView[]> {
-  const trimmed = query.trim();
-  if (!trimmed) return listProducts(locale);
-  const rows = await prisma.product.findMany({
-    where: {
-      localizations: {
-        some: {
-          OR: [
-            { name: { contains: trimmed, mode: 'insensitive' } },
-            { description: { contains: trimmed, mode: 'insensitive' } },
-          ],
-        },
-      },
-    },
-    include: {
-      localizations: true,
-      category: { include: { localizations: true } },
-    },
-    orderBy: { createdAt: 'asc' },
+export interface CatalogQuery {
+  locale: LocaleId;
+  /** Free-text query, matched against the copy the page displays for this locale. */
+  q?: string;
+  /** Category slug (tea family). */
+  category?: string;
+  /** Leaf form id. */
+  form?: ProductFormId;
+  /** Caffeine id. */
+  caffeine?: CaffeineLevelId;
+  /** Inclusive lower price bound in integer cents. */
+  priceMinCents?: number;
+  /** Inclusive upper price bound in integer cents. */
+  priceMaxCents?: number;
+  /** `true` = in stock only (inventory > 0), `false` = out of stock only (inventory === 0). */
+  inStock?: boolean;
+  /** Sort id; default `featured`. */
+  sort?: CatalogSortId;
+  /** 1-based page; out-of-range pages clamp to the last page. */
+  page?: number;
+  /** Page size; default CATALOG_PAGE_SIZE. Not part of the URL contract. */
+  pageSize?: number;
+}
+
+export interface CatalogResult {
+  /** The current page's products, in the applied sort order. */
+  products: ProductView[];
+  /** Total matches before pagination. */
+  total: number;
+  /** Effective 1-based page (clamped into range). */
+  page: number;
+  pageSize: number;
+  /** Effective page count (at least 1). */
+  pageCount: number;
+}
+
+/**
+ * Server-backed discovery query: locale-scoped search, fact filters, sort,
+ * and stable pagination (ADR-0004).
+ *
+ * Search matches the SAME copy the page renders for the active locale: the
+ * requested locale's localization row, falling back deterministically to
+ * English, then to any available row (the ADR-0003 pick order). A product
+ * whose effective copy is English is therefore found by its English text in
+ * every locale that lacks its own row — never by another locale's rows when
+ * its own copy exists.
+ *
+ * Price and inventory filters operate on the language-neutral facts
+ * (`priceCents`, `inventory`), never on localized display strings.
+ *
+ * The demo catalog is small, so filtering and pagination run in memory on
+ * one deterministic query; ADR-0004 records the trigger for moving these
+ * predicates into SQL when the catalog grows.
+ */
+export async function queryProducts(query: CatalogQuery): Promise<CatalogResult> {
+  const locale = query.locale;
+  const pageSize =
+    query.pageSize !== undefined && Number.isSafeInteger(query.pageSize) && query.pageSize > 0
+      ? query.pageSize
+      : CATALOG_PAGE_SIZE;
+  const requestedPage =
+    query.page !== undefined && Number.isSafeInteger(query.page) && query.page > 0
+      ? query.page
+      : 1;
+
+  const rows = await findProductRow();
+  const q = (query.q ?? '').trim().toLocaleLowerCase();
+
+  const matched = rows.filter((row) => {
+    if (q) {
+      const loc = pickLocalization(row.localizations, locale);
+      const name = (loc?.name ?? '').toLocaleLowerCase();
+      const description = (loc?.description ?? '').toLocaleLowerCase();
+      if (!name.includes(q) && !description.includes(q)) return false;
+    }
+    if (query.category !== undefined && row.category.slug !== query.category) return false;
+    if (query.form !== undefined && FORM_FROM_ENUM[row.form] !== query.form) return false;
+    if (query.caffeine !== undefined && CAFFEINE_FROM_ENUM[row.caffeine] !== query.caffeine) {
+      return false;
+    }
+    if (query.priceMinCents !== undefined && row.priceCents < query.priceMinCents) return false;
+    if (query.priceMaxCents !== undefined && row.priceCents > query.priceMaxCents) return false;
+    if (query.inStock !== undefined && (row.inventory > 0) !== query.inStock) return false;
+    return true;
   });
-  return rows.map((row) => toProductView(row, locale));
+
+  let views = matched.map((row) => toProductView(row, locale));
+  views = sortViews(views, query.sort ?? 'featured', locale);
+
+  const total = views.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, requestedPage), pageCount);
+  const start = (page - 1) * pageSize;
+  return {
+    products: views.slice(start, start + pageSize),
+    total,
+    page,
+    pageSize,
+    pageCount,
+  };
+}
+
+function sortViews(views: ProductView[], sort: CatalogSortId, locale: LocaleId): ProductView[] {
+  const sorted = [...views];
+  switch (sort) {
+    case 'price-asc':
+      sorted.sort((a, b) => a.priceCents - b.priceCents || a.slug.localeCompare(b.slug));
+      break;
+    case 'price-desc':
+      sorted.sort((a, b) => b.priceCents - a.priceCents || a.slug.localeCompare(b.slug));
+      break;
+    case 'name-asc':
+      // Display sort over the localized name; collation follows the active locale.
+      sorted.sort((a, b) => a.name.localeCompare(b.name, locale) || a.slug.localeCompare(b.slug));
+      break;
+    case 'featured':
+    default:
+      // Default ranking input is language-neutral: createdAt ascending, then slug.
+      sorted.sort(
+        (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.slug.localeCompare(b.slug),
+      );
+      break;
+  }
+  return sorted;
 }

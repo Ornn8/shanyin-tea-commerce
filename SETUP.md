@@ -57,7 +57,9 @@ pnpm prisma:migrate   # prisma migrate deploy
 pnpm db:seed          # prisma db seed  (tsx prisma/seed.ts, upsert-based, idempotent)
 ```
 
-The seed creates 3 categories and 6 demo products, each localized in `zh-CN`, `en`, and `ja`.
+The seed creates 3 categories and 6 demo products, each localized in `zh-CN`, `en`, and `ja`,
+with language-neutral leaf form (`form`) and caffeine (`caffeine`) demo facts used by catalog
+filtering (ADR-0004).
 
 ## 5. Run
 

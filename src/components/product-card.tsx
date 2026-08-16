@@ -25,6 +25,14 @@ export function ProductCard({ product, locale, t }: ProductCardProps) {
         <span className="absolute left-2 top-2 rounded-sm bg-white/90 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-stone-500 shadow-sm">
           {t('common.demoBadge')}
         </span>
+        {product.inventory === 0 && (
+          <span
+            data-testid="stock-badge"
+            className="absolute bottom-2 left-2 rounded-sm bg-lacquer-600 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white shadow-sm"
+          >
+            {t('product.outOfStock')}
+          </span>
+        )}
         <span className="absolute right-2 top-2">
           <SealSm glyph={glyph} className="rotate-6" />
         </span>

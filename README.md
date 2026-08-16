@@ -2,8 +2,8 @@
 
 A production-shaped vertical slice for a single-merchant tea storefront under the working brand
 **Shanyin Tea** (山隐茶事). A visitor can open the home page, switch among Simplified Chinese,
-English, and Japanese, and browse seeded demo tea products served from PostgreSQL through the
-real application stack.
+English, and Japanese, and search and filter seeded demo tea products — served from PostgreSQL
+through the real application stack — with shareable, URL-encoded discovery state.
 
 > ⚠️ **Demo content.** All commercial claims, certifications, origins, prices, and imagery in
 > this repository are replaceable placeholders until the merchant supplies verified assets.
@@ -53,10 +53,17 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
 | ------------------------------ | ---------------------------------------------- |
 | `/`                            | Redirects to the persisted (or default) locale |
 | `/zh-CN`, `/en`, `/ja`         | Localized home page                            |
-| `/…/products`                  | Full catalog (optional `?category=slug`)       |
+| `/…/products`                  | Catalog with URL-state discovery (see below)   |
 | `/…/products/:slug`            | Product detail + add-to-cart                   |
-| `/…/search?q=…`                | Catalog search                                 |
+| `/…/search?q=…`                | Search results with the same discovery view    |
 | `/…/cart`                      | Demo cart (cookie-persisted, no checkout)      |
+
+Both `/…/products` and `/…/search` share one server-backed discovery view. Search intent,
+filters, sort order, and page are encoded in the URL — `q`, `category`, `form`
+(`loose`/`compressed`), `caffeine` (`low`/`medium`/`high`), `priceMin`/`priceMax` (whole CNY
+yuan), `inStock` (`true`/`false`), `sort` (`featured`/`price-asc`/`price-desc`/`name-asc`),
+and `page` — so results survive refresh, back/forward navigation, and locale switching. See
+[ADR-0004](./docs/adr/0004-catalog-discovery-url-state.md) for the full contract.
 
 ## Scripts
 
@@ -81,5 +88,9 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
   - `0001-full-stack-monolith.md` — why the app is a single Next.js monolith.
   - `0002-localization-registry.md` — registry-driven i18n, fallback, race safety, CI checks.
   - `0003-commerce-data-and-currency.md` — language-neutral facts vs. localized copy, CNY.
+  - `0004-catalog-discovery-url-state.md` — URL-encoded search/filter/sort/page state,
+    locale-scoped search with a deterministic fallback.
 - [docs/DSH-IMPLEMENTATION-RECEIPT.md](./docs/DSH-IMPLEMENTATION-RECEIPT.md) — implementation
-  receipt (model + reasoning, no fallback).
+  receipt for Issue #1 (model + reasoning, no fallback).
+- [docs/DSH-IMPLEMENTATION-RECEIPT-2.md](./docs/DSH-IMPLEMENTATION-RECEIPT-2.md) — implementation
+  receipt for Issue #2 (model + reasoning, no fallback).
