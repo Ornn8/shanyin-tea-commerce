@@ -1,0 +1,66 @@
+// Shanyin Tea — demo storefront data model.
+//
+// Commerce facts (identifiers, SKUs, prices, inventory, origin) are stored once
+// and language-neutral. Localized copy lives in the *Localization tables and is
+// keyed by locale id from the i18n registry (zh-CN | en | ja).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Category {
+  id            String                  @id @default(cuid())
+  slug          String                  @unique
+  sortOrder     Int                     @default(0)
+  products      Product[]
+  localizations CategoryLocalization[]
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+}
+
+model CategoryLocalization {
+  categoryId String
+  locale     String
+  name       String
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([categoryId, locale])
+  @@index([locale])
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  sku          String   @unique
+  priceCents   Int
+  currency     String   @default("CNY")
+  inventory    Int
+  origin       String
+  categoryId   String
+  category     Category @relation(fields: [categoryId], references: [id])
+  localizations ProductLocalization[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([categoryId])
+}
+
+model ProductLocalization {
+  productId    String
+  locale       String
+  name         String
+  description  String
+  tastingNotes String
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([productId, locale])
+  @@index([locale])
+}
