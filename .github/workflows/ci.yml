@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'agent/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: shanyin
+          POSTGRES_PASSWORD: shanyin
+          POSTGRES_DB: shanyin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shanyin -d shanyin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://shanyin:shanyin@localhost:5432/shanyin?schema=public
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Setup Node.js 24 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies (clean install)
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply database migrations
+        run: pnpm prisma:migrate
+
+      - name: Seed demo catalog
+        run: pnpm db:seed
+
+      - name: Validate i18n catalogs
+        run: pnpm i18n:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit + integration tests
+        run: pnpm test
+
+      - name: Production build
+        run: pnpm build
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright smoke (desktop + mobile, all locales) with screenshots
+        run: pnpm e2e
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_WORKFLOW: CI
+
+      - name: Upload storefront screenshots (desktop + mobile, all locales)
+        uses: actions/upload-artifact@v4
+        with:
+          name: storefront-screenshots
+          path: e2e/screenshots/
+          if-no-files-found: error
+          retention-days: 90

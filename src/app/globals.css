@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/*
+ * Shanyin Tea design contract (ADR-0003):
+ * pine green · celadon · stone gray · restrained lacquer red,
+ * modern CJK UI typography, tea-ticket and seal-label details.
+ */
+@theme {
+  --color-pine-50: #f0f6f2;
+  --color-pine-100: #dcebe2;
+  --color-pine-200: #bcd7c7;
+  --color-pine-300: #92bba5;
+  --color-pine-400: #64997f;
+  --color-pine-500: #437d63;
+  --color-pine-600: #31644e;
+  --color-pine-700: #275140;
+  --color-pine-800: #214134;
+  --color-pine-900: #1c362c;
+  --color-pine-950: #0e1f19;
+
+  --color-celadon-50: #f3f7f4;
+  --color-celadon-100: #e4ede6;
+  --color-celadon-200: #c9dbcf;
+  --color-celadon-300: #a3c2ad;
+  --color-celadon-400: #7aa386;
+  --color-celadon-500: #598768;
+  --color-celadon-600: #436c52;
+  --color-celadon-700: #365743;
+  --color-celadon-800: #2d4638;
+  --color-celadon-900: #263a2f;
+
+  --color-lacquer-50: #faf2f1;
+  --color-lacquer-100: #f3e0de;
+  --color-lacquer-200: #e6c1be;
+  --color-lacquer-300: #d49a96;
+  --color-lacquer-400: #bf6e69;
+  --color-lacquer-500: #a84e49;
+  --color-lacquer-600: #8f3b37;
+  --color-lacquer-700: #7a312e;
+  --color-lacquer-800: #672b29;
+  --color-lacquer-900: #572827;
+  --color-lacquer-950: #2f1312;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  --font-serif:
+    "Songti SC", "Noto Serif SC", "Noto Serif JP", "Hiragino Mincho ProN",
+    "Yu Mincho", Georgia, serif;
+}
+
+@layer base {
+  html {
+    @apply bg-stone-50 text-stone-900 antialiased;
+  }
+
+  ::selection {
+    @apply bg-pine-200 text-pine-950;
+  }
+}
+
+/* Tea-ticket card: perforated divider + notched price ticket. */
+@utility ticket-card {
+  @apply relative rounded-lg border border-stone-200 bg-white shadow-sm transition-shadow hover:shadow-md;
+}
+
+@utility ticket-perforation {
+  background-image: radial-gradient(circle, transparent 0 3px, var(--color-stone-200) 3.5px 4.5px, transparent 5px);
+  background-size: 12px 9px;
+  background-position: center;
+  height: 9px;
+}
+
+@utility price-ticket {
+  @apply inline-flex items-center rounded-sm bg-lacquer-600 px-2.5 py-1 text-sm font-semibold tracking-wide text-white;
+  clip-path: polygon(0 8px, 6px 0, calc(100% - 6px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 8px));
+}
+
+/* Seal-label stamp. */
+@utility seal-stamp {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-[5px] bg-lacquer-600 font-serif text-sm font-bold text-white shadow-sm;
+  letter-spacing: 0.05em;
+}
+
+@utility seal-stamp-sm {
+  @apply inline-flex h-6 w-6 items-center justify-center rounded-[4px] bg-lacquer-600 font-serif text-[11px] font-bold text-white shadow-sm;
+  letter-spacing: 0.05em;
+}
