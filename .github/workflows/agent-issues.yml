@@ -24,7 +24,7 @@ jobs:
       && !github.event.issue.pull_request
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
       && github.event.comment.body == '/automation resume'
-    uses: Ornn8/dsh-agent-automation/.github/workflows/resume-subject.yml@f8385c921e555fdd59636d959fac7817b2d1ca86
+    uses: Ornn8/dsh-agent-automation/.github/workflows/resume-subject.yml@f79f3d1e5b5d20c4c8639d2a811380ba52cefcf9
     with:
       issue_number: ${{ github.event.issue.number }}
       comment_id: ${{ github.event.comment.id }}
@@ -39,7 +39,7 @@ jobs:
       || (github.event_name == 'issues'
         && github.event.action == 'labeled'
         && contains(fromJSON('["agent/dsh","agent/dsh-failed"]'), github.event.label.name))
-    uses: Ornn8/dsh-agent-automation/.github/workflows/dispatch-backlog.yml@f8385c921e555fdd59636d959fac7817b2d1ca86
+    uses: Ornn8/dsh-agent-automation/.github/workflows/dispatch-backlog.yml@f79f3d1e5b5d20c4c8639d2a811380ba52cefcf9
     with:
       requested_issue_number: ${{ (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'agent/dsh' && github.event.issue.number) || (github.event_name == 'repository_dispatch' && github.event.action == 'agent_backlog_reconcile' && github.event.client_payload.issue_number) || 0 }}
 
@@ -48,7 +48,7 @@ jobs:
       github.event_name == 'repository_dispatch'
       && github.event.action == 'automation_fault_recovered'
       && github.event.client_payload.repository == github.repository
-    uses: Ornn8/dsh-agent-automation/.github/workflows/resume-fault.yml@f8385c921e555fdd59636d959fac7817b2d1ca86
+    uses: Ornn8/dsh-agent-automation/.github/workflows/resume-fault.yml@f79f3d1e5b5d20c4c8639d2a811380ba52cefcf9
     with:
       subject_type: ${{ github.event.client_payload.subject_type }}
       subject_number: ${{ github.event.client_payload.subject_number }}
@@ -61,7 +61,7 @@ jobs:
       && github.event.client_payload.version == 2
       && github.event.client_payload.repository == github.repository
       && github.event.client_payload.subject.type == 'issue'
-    uses: Ornn8/dsh-agent-automation/.github/workflows/dsh-issue.yml@f8385c921e555fdd59636d959fac7817b2d1ca86
+    uses: Ornn8/dsh-agent-automation/.github/workflows/dsh-issue.yml@f79f3d1e5b5d20c4c8639d2a811380ba52cefcf9
     with:
       work_request: ${{ toJSON(github.event.client_payload) }}
 
@@ -69,4 +69,4 @@ jobs:
     if: >-
       github.event_name == 'push'
       && github.ref_name == github.event.repository.default_branch
-    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-reviews.yml@f8385c921e555fdd59636d959fac7817b2d1ca86
+    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-reviews.yml@f79f3d1e5b5d20c4c8639d2a811380ba52cefcf9
