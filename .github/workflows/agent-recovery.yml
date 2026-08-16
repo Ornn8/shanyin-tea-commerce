@@ -1,0 +1,21 @@
+name: Agent Recovery
+
+on:
+  workflow_run:
+    workflows: [Agent Issues, Agent PR Rework, Agent PR CI Repair, Agent PR Review]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  recover:
+    if: >-
+      contains(fromJSON('["failure", "cancelled", "timed_out", "startup_failure", "stale"]'), github.event.workflow_run.conclusion)
+      && github.event.workflow_run.name != github.workflow
+    uses: Ornn8/dsh-agent-automation/.github/workflows/recover-backlog.yml@b2af642081fa71adb6a57a37dbe3bf3f58a34c15
+    with:
+      source_run_id: ${{ github.event.workflow_run.id }}
