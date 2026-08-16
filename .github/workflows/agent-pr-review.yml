@@ -22,13 +22,15 @@ jobs:
       github.event_name == 'repository_dispatch'
       || (github.event.pull_request.draft == false
         && github.event.pull_request.head.repo.full_name == github.repository
+        && (github.event.action != 'synchronize'
+          || !contains(github.event.pull_request.labels.*.name, 'automation/repairing'))
         && (github.event.action != 'labeled' || github.event.label.name == 'automation/review-ready')
         && (github.event.action != 'edited' || github.event.changes.base.ref.from != null))
-    uses: Ornn8/dsh-agent-automation/.github/workflows/agent-review.yml@a635add80f0e1c71ed72622e0dacf89d87223e4f
+    uses: Ornn8/dsh-agent-automation/.github/workflows/agent-review.yml@2eb913951aece7164ad38d86fbf4ec8212472646
     with:
       pull_request_number: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pull_request_number || github.event.pull_request.number }}
       base_sha: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.base_sha || github.event.pull_request.base.sha }}
       head_sha: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.head_sha || github.event.pull_request.head.sha }}
-      profile_id: github-pr-cycle
-      workflow_id: default
-      stage_id: review
+      profile_id: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.profile_id || 'github-pr-cycle' }}
+      workflow_id: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.workflow_id || 'default' }}
+      stage_id: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.stage_id || 'review' }}
