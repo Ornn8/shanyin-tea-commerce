@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { LOCALE_IDS, LOCALE_META, type LocaleId } from '@/i18n/registry';
 import type { Translator } from '@/i18n/catalog';
 import { LocalePicker } from './locale-picker';
@@ -56,7 +57,9 @@ export function SiteHeader({ locale, t }: SiteHeaderProps) {
             </span>
           </Link>
           <div className="flex items-center gap-2.5">
-            <LocalePicker locale={locale} options={options} label={t('locale.switchTo')} />
+            <Suspense fallback={null}>
+              <LocalePicker locale={locale} options={options} label={t('locale.switchTo')} />
+            </Suspense>
             <CartButton href={`/${locale}/cart`} label={t('nav.cart')} />
           </div>
         </div>

@@ -1,14 +1,15 @@
 import { notFound } from 'next/navigation';
 import { createT } from '@/i18n/catalog';
 import { isLocaleId, type LocaleId } from '@/i18n/registry';
-import { searchProducts } from '@/lib/products';
-import { ProductGrid } from '@/components/product-grid';
+import { parseCatalogParams, toCatalogQuery } from '@/lib/catalog-params';
+import { listCategories, queryProducts } from '@/lib/products';
+import { CatalogBrowser } from '@/components/catalog-browser';
 
 export const dynamic = 'force-dynamic';
 
 interface SearchPageProps {
   params: Promise<{ locale: string }>;
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 export default async function SearchPage({ params, searchParams }: SearchPageProps) {
@@ -17,27 +18,31 @@ export default async function SearchPage({ params, searchParams }: SearchPagePro
   const locale: LocaleId = raw;
   const t = createT(locale);
 
-  const { q } = await searchParams;
-  const query = (q ?? '').trim();
-  const products = await searchProducts(query, locale);
+  const parsed = parseCatalogParams(await searchParams);
+  const [categories, result] = await Promise.all([
+    listCategories(locale),
+    queryProducts(toCatalogQuery(locale, parsed)),
+  ]);
 
   return (
     <div className="flex flex-col gap-6 py-8">
-      <h1 className="font-serif text-2xl font-semibold text-pine-900" data-testid="search-title">
-        {t('search.title')}
-      </h1>
-      {query ? (
-        <p className="text-sm text-stone-600" data-testid="search-summary">
-          {t('search.resultsFor', { query })}
-        </p>
-      ) : (
-        <p className="text-sm text-stone-500">{t('search.allProducts')}</p>
-      )}
-      <ProductGrid
-        products={products}
+      <CatalogBrowser
         locale={locale}
         t={t}
-        empty={query ? t('search.noResults', { query }) : undefined}
+        base="search"
+        categories={categories}
+        params={parsed}
+        result={result}
+        title={t('search.title')}
+        summary={
+          parsed.q ? (
+            <p className="text-sm text-stone-600" data-testid="search-summary">
+              {t('search.resultsFor', { query: parsed.q })}
+            </p>
+          ) : (
+            <p className="text-sm text-stone-500">{t('search.allProducts')}</p>
+          )
+        }
       />
     </div>
   );

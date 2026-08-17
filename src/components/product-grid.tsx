@@ -13,7 +13,11 @@ interface ProductGridProps {
 
 export function ProductGrid({ products, locale, t, empty }: ProductGridProps) {
   if (products.length === 0) {
-    return <div className="py-10 text-center text-sm text-stone-500">{empty}</div>;
+    return (
+      <div data-testid="catalog-empty" className="py-10 text-center text-sm text-stone-500">
+        {empty}
+      </div>
+    );
   }
   return (
     <div

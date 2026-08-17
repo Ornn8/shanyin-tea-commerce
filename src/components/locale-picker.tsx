@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { LocaleSwitchStore } from '@/i18n/client-store';
 import { LOCALE_COOKIE, type LocaleId } from '@/i18n/registry';
@@ -29,6 +29,7 @@ interface LocalePickerProps {
 export function LocalePicker({ locale, options, label }: LocalePickerProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [store] = useState(() => new LocaleSwitchStore<null>());
 
   function switchTo(next: LocaleId) {
@@ -44,9 +45,14 @@ export function LocalePicker({ locale, options, label }: LocalePickerProps) {
       .apply(next, async () => null)
       .catch(() => undefined);
 
+    // Swap the locale segment in place and preserve the query string, so
+    // catalog search/filter/sort/page state survives locale switching
+    // (ADR-0004).
     const segments = pathname.split('/');
     segments[1] = next;
-    router.replace(segments.join('/') || `/${next}`);
+    const query = searchParams.toString();
+    const target = segments.join('/') || `/${next}`;
+    router.replace(query ? `${target}?${query}` : target);
   }
 
   return (

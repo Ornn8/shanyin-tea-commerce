@@ -27,6 +27,10 @@ interface ProductSeed {
   priceCents: number;
   inventory: number;
   origin: string;
+  /** Language-neutral leaf form fact (demo placeholder). */
+  form: 'LOOSE' | 'COMPRESSED';
+  /** Language-neutral caffeine fact (demo placeholder). */
+  caffeine: 'LOW' | 'MEDIUM' | 'HIGH';
   categorySlug: string;
   copy: Record<LocaleSeed, { name: string; description: string; tastingNotes: string }>;
 }
@@ -44,6 +48,8 @@ const products: ProductSeed[] = [
     priceCents: 128000,
     inventory: 40,
     origin: 'Longjing Village, Hangzhou, Zhejiang',
+    form: 'LOOSE',
+    caffeine: 'HIGH',
     categorySlug: 'green-tea',
     copy: {
       'zh-CN': {
@@ -74,6 +80,8 @@ const products: ProductSeed[] = [
     priceCents: 96000,
     inventory: 25,
     origin: 'Dongting Mountain, Suzhou, Jiangsu',
+    form: 'LOOSE',
+    caffeine: 'MEDIUM',
     categorySlug: 'green-tea',
     copy: {
       'zh-CN': {
@@ -102,6 +110,8 @@ const products: ProductSeed[] = [
     priceCents: 88000,
     inventory: 60,
     origin: 'Anxi County, Fujian',
+    form: 'LOOSE',
+    caffeine: 'MEDIUM',
     categorySlug: 'oolong-tea',
     copy: {
       'zh-CN': {
@@ -130,6 +140,8 @@ const products: ProductSeed[] = [
     priceCents: 168000,
     inventory: 12,
     origin: 'Wuyi Mountain, Fujian',
+    form: 'LOOSE',
+    caffeine: 'MEDIUM',
     categorySlug: 'oolong-tea',
     copy: {
       'zh-CN': {
@@ -158,6 +170,8 @@ const products: ProductSeed[] = [
     priceCents: 72000,
     inventory: 30,
     origin: 'Liubao Town, Wuzhou, Guangxi',
+    form: 'COMPRESSED',
+    caffeine: 'LOW',
     categorySlug: 'dark-tea',
     copy: {
       'zh-CN': {
@@ -186,6 +200,8 @@ const products: ProductSeed[] = [
     priceCents: 64000,
     inventory: 18,
     origin: 'Menghai, Yunnan',
+    form: 'COMPRESSED',
+    caffeine: 'LOW',
     categorySlug: 'dark-tea',
     copy: {
       'zh-CN': {
@@ -235,6 +251,8 @@ async function main() {
         priceCents: product.priceCents,
         inventory: product.inventory,
         origin: product.origin,
+        form: product.form,
+        caffeine: product.caffeine,
         categoryId: category.id,
       },
       create: {
@@ -243,6 +261,8 @@ async function main() {
         priceCents: product.priceCents,
         inventory: product.inventory,
         origin: product.origin,
+        form: product.form,
+        caffeine: product.caffeine,
         categoryId: category.id,
       },
     });

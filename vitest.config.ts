@@ -7,6 +7,9 @@ export default defineConfig({
     environment: 'node',
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Integration suites share one PostgreSQL database (temp fixtures),
+    // so test files must not run in parallel.
+    fileParallelism: false,
   },
   resolve: {
     alias: {
