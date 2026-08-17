@@ -15,6 +15,7 @@
  */
 import { prisma } from '@/lib/prisma';
 import { FALLBACK_LOCALE, type LocaleId } from '@/i18n/registry';
+import { effectiveField, type LocalizedRow } from '@/lib/admin/preview';
 import {
   CAFFEINE_LEVELS,
   CATALOG_PAGE_SIZE,
@@ -78,21 +79,40 @@ function pickLocalization<T extends { locale: string }>(
   );
 }
 
+/**
+ * The variant a shopper sees: the product's first-created variant. The
+ * storefront intentionally reads language-neutral facts (SKU, integer-cents
+ * price, inventory) from variants only (ADR-0005); unpublished products are
+ * never returned.
+ */
+function primaryVariant(row: ProductRow) {
+  return row.variants[0];
+}
+
 export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
-  const loc = pickLocalization(row.localizations, locale);
+  // Field-level English fallback (ADR-0003/0005), the same deterministic
+  // semantics the merchant editor previews: the locale's own value when it is
+  // filled, else English, else any row, else the slug/empty. A locale row may
+  // legally store an empty description or tasting notes (the publication gate
+  // requires English copy only), so the storefront must render the English
+  // fallback instead of returning the blank string — otherwise published
+  // zh-CN / ja pages show blank copy that the merchant preview advertised as
+  // falling back to English.
+  const rows = row.localizations as LocalizedRow[];
   const catLoc = pickLocalization(row.category.localizations, locale);
+  const variant = primaryVariant(row);
   return {
     id: row.id,
     slug: row.slug,
-    sku: row.sku,
-    priceCents: row.priceCents,
-    inventory: row.inventory,
+    sku: variant?.sku ?? '',
+    priceCents: variant?.priceCents ?? 0,
+    inventory: variant?.inventory ?? 0,
     origin: row.origin,
     form: FORM_FROM_ENUM[row.form] ?? 'loose',
     caffeine: CAFFEINE_FROM_ENUM[row.caffeine] ?? 'medium',
-    name: loc?.name ?? row.slug,
-    description: loc?.description ?? '',
-    tastingNotes: loc?.tastingNotes ?? '',
+    name: effectiveField(rows, locale, 'name', row.slug),
+    description: effectiveField(rows, locale, 'description'),
+    tastingNotes: effectiveField(rows, locale, 'tastingNotes'),
     category: { slug: row.category.slug, name: catLoc?.name ?? row.category.slug },
     createdAt: row.createdAt,
   };
@@ -100,9 +120,12 @@ export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
 
 function findProductRow() {
   return prisma.product.findMany({
+    // Only published products exist on the storefront (ADR-0005).
+    where: { published: true },
     include: {
       localizations: true,
       category: { include: { localizations: true } },
+      variants: { orderBy: { createdAt: 'asc' } },
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -115,10 +138,11 @@ export async function listProducts(locale: LocaleId): Promise<ProductView[]> {
 
 export async function getProductBySlug(slug: string, locale: LocaleId): Promise<ProductView | null> {
   const row = await prisma.product.findUnique({
-    where: { slug },
+    where: { slug, published: true },
     include: {
       localizations: true,
       category: { include: { localizations: true } },
+      variants: { orderBy: { createdAt: 'asc' } },
     },
   });
   return row ? toProductView(row, locale) : null;
@@ -127,13 +151,20 @@ export async function getProductBySlug(slug: string, locale: LocaleId): Promise<
 export async function getProductsBySkus(skus: string[], locale: LocaleId): Promise<ProductView[]> {
   if (skus.length === 0) return [];
   const rows = await prisma.product.findMany({
-    where: { sku: { in: skus } },
+    where: { published: true, variants: { some: { sku: { in: skus } } } },
     include: {
       localizations: true,
       category: { include: { localizations: true } },
+      variants: { orderBy: { createdAt: 'asc' } },
     },
   });
-  const bySku = new Map(rows.map((row) => [row.sku, toProductView(row, locale)]));
+  const bySku = new Map<string, ProductView>();
+  for (const row of rows) {
+    const view = toProductView(row, locale);
+    for (const variant of row.variants) {
+      bySku.set(variant.sku, view);
+    }
+  }
   // Preserve cart order.
   return skus.flatMap((sku) => (bySku.get(sku) ? [bySku.get(sku)!] : []));
 }
@@ -202,12 +233,12 @@ export interface CatalogResult {
  * Server-backed discovery query: locale-scoped search, fact filters, sort,
  * and stable pagination (ADR-0004).
  *
- * Search matches the SAME copy the page renders for the active locale: the
- * requested locale's localization row, falling back deterministically to
- * English, then to any available row (the ADR-0003 pick order). A product
- * whose effective copy is English is therefore found by its English text in
- * every locale that lacks its own row — never by another locale's rows when
- * its own copy exists.
+ * Search matches the SAME copy the page renders for the active locale: each
+ * name/description field resolves through the deterministic ADR-0003/0005
+ * pick order (requested locale → English → any row), so a locale whose stored
+ * copy is empty but displays the English fallback is found by its English
+ * text in every locale that lacks its own copy — never by another locale's
+ * rows when its own effective copy exists.
  *
  * Price and inventory filters operate on the language-neutral facts
  * (`priceCents`, `inventory`), never on localized display strings.
@@ -231,10 +262,14 @@ export async function queryProducts(query: CatalogQuery): Promise<CatalogResult>
   const q = (query.q ?? '').trim().toLocaleLowerCase();
 
   const matched = rows.filter((row) => {
+    const variant = primaryVariant(row);
     if (q) {
-      const loc = pickLocalization(row.localizations, locale);
-      const name = (loc?.name ?? '').toLocaleLowerCase();
-      const description = (loc?.description ?? '').toLocaleLowerCase();
+      // Match the SAME copy the page renders: the effective field-level value
+      // (own locale → English → any row), so a locale whose stored description
+      // is empty but displays the English fallback is found by its English text.
+      const rowsForLocale = row.localizations as LocalizedRow[];
+      const name = effectiveField(rowsForLocale, locale, 'name', '').toLocaleLowerCase();
+      const description = effectiveField(rowsForLocale, locale, 'description', '').toLocaleLowerCase();
       if (!name.includes(q) && !description.includes(q)) return false;
     }
     if (query.category !== undefined && row.category.slug !== query.category) return false;
@@ -242,9 +277,17 @@ export async function queryProducts(query: CatalogQuery): Promise<CatalogResult>
     if (query.caffeine !== undefined && CAFFEINE_FROM_ENUM[row.caffeine] !== query.caffeine) {
       return false;
     }
-    if (query.priceMinCents !== undefined && row.priceCents < query.priceMinCents) return false;
-    if (query.priceMaxCents !== undefined && row.priceCents > query.priceMaxCents) return false;
-    if (query.inStock !== undefined && (row.inventory > 0) !== query.inStock) return false;
+    // Price and availability filters operate on the language-neutral variant
+    // facts (integer cents, per-variant inventory) — never on display strings.
+    if (query.priceMinCents !== undefined && (variant?.priceCents ?? 0) < query.priceMinCents) {
+      return false;
+    }
+    if (query.priceMaxCents !== undefined && (variant?.priceCents ?? 0) > query.priceMaxCents) {
+      return false;
+    }
+    if (query.inStock !== undefined && ((variant?.inventory ?? 0) > 0) !== query.inStock) {
+      return false;
+    }
     return true;
   });
 

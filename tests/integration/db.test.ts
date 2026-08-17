@@ -16,24 +16,30 @@ describeDb('PostgreSQL + Prisma integration', () => {
     await prisma.$disconnect();
   });
 
-  it('seeded catalog: 3 categories, 6 products, every product localized in all locales', async () => {
+  it('seeded catalog: 3 categories, 6 published products, every product localized in all locales', async () => {
     const [categories, products] = await Promise.all([prisma.category.count(), prisma.product.count()]);
     expect(categories).toBe(3);
     expect(products).toBe(6);
     const rows = await prisma.product.findMany({ include: { localizations: true } });
     for (const row of rows) {
       expect(new Set(row.localizations.map((loc) => loc.locale))).toEqual(new Set(LOCALE_IDS));
+      expect(row.published).toBe(true);
     }
   });
 
-  it('commerce facts are language-neutral and shared', async () => {
-    const rows = await prisma.product.findMany();
+  it('commerce facts are language-neutral and shared on variants', async () => {
+    const rows = await prisma.product.findMany({ include: { variants: true } });
     expect(new Set(rows.map((row) => row.slug)).size).toBe(rows.length);
-    expect(new Set(rows.map((row) => row.sku)).size).toBe(rows.length);
     for (const row of rows) {
-      expect(row.priceCents).toBeGreaterThan(0);
-      expect(row.currency).toBe('CNY');
-      expect(row.inventory).toBeGreaterThanOrEqual(0);
+      expect(row.variants.length).toBeGreaterThan(0);
+      const skus = row.variants.map((variant) => variant.sku);
+      expect(new Set(skus).size).toBe(skus.length);
+      for (const variant of row.variants) {
+        expect(Number.isInteger(variant.priceCents)).toBe(true);
+        expect(variant.priceCents).toBeGreaterThan(0);
+        expect(Number.isInteger(variant.inventory)).toBe(true);
+        expect(variant.inventory).toBeGreaterThanOrEqual(0);
+      }
       expect(row.origin.length).toBeGreaterThan(0);
     }
   });

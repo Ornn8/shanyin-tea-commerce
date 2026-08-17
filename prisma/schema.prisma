@@ -1,9 +1,19 @@
 // Shanyin Tea — demo storefront data model.
 //
-// Commerce facts (identifiers, SKUs, prices, inventory, origin, leaf form,
+// Commerce facts (identifiers, prices, inventory, origin, leaf form,
 // caffeine level) are stored once and language-neutral. Localized copy lives
 // in the *Localization tables and is keyed by locale id from the i18n registry
 // (zh-CN | en | ja).
+//
+// Merchant administration (Issue #3, ADR-0005):
+// - Products own shared facts plus a `published` lifecycle state and one or
+//   more language-neutral variants (SKU, price in integer CNY cents,
+//   inventory). Inventory is per variant and shared across every locale.
+// - `User`/`Session`/`Account`/`Verification` back the maintained
+//   authentication library (better-auth). Public sign-up is disabled; the
+//   seed creates the single allowlisted merchant administrator.
+// - `AuditLog` records every mutation (actor, timestamp, entity,
+//   before/after summary) and never stores secrets.
 
 generator client {
   provider = "prisma-client"
@@ -49,34 +59,135 @@ model CategoryLocalization {
 }
 
 model Product {
-  id           String          @id @default(cuid())
-  slug         String          @unique
-  sku          String          @unique
-  priceCents   Int
-  currency     String          @default("CNY")
-  inventory    Int
-  origin       String
-  form         ProductForm     @default(LOOSE)
-  caffeine     CaffeineLevel   @default(MEDIUM)
-  categoryId   String
-  category     Category        @relation(fields: [categoryId], references: [id])
+  id            String               @id @default(cuid())
+  slug          String               @unique
+  origin        String
+  form          ProductForm          @default(LOOSE)
+  caffeine      CaffeineLevel        @default(MEDIUM)
+  categoryId    String
+  category      Category             @relation(fields: [categoryId], references: [id])
+  variants      ProductVariant[]
   localizations ProductLocalization[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  /// Publication lifecycle state (ADR-0005): only published products are
+  /// visible on the storefront.
+  published     Boolean              @default(false)
+  publishedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
   @@index([categoryId])
 }
 
+/// A language-neutral sellable unit of a product. Price is stored as integer
+/// minor units of CNY (`priceCents`); inventory is a non-negative integer
+/// shared by every locale (never localized).
+model ProductVariant {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  /// Globally unique SKU — publishing rejects duplicates.
+  sku        String   @unique
+  /// Shared display name (e.g. package size); not localized copy.
+  name       String
+  priceCents Int
+  inventory  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([productId])
+}
+
 model ProductLocalization {
-  productId    String
-  locale       String
-  name         String
-  description  String
-  tastingNotes String
+  productId      String
+  locale         String
+  name           String
+  description    String
+  tastingNotes   String
+  /// Optional localized copy (falls back to English in preview, ADR-0003/0005).
+  brewingNotes   String?
+  seoTitle       String?
+  seoDescription String?
+  mediaAlt       String?
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@id([productId, locale])
   @@index([locale])
+}
+
+// ---------------------------------------------------------------------------
+// Merchant administration authentication (better-auth, ADR-0005).
+// Model and field names are the adapter contract; keep them as-is.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  /// Scrypt hash; never logged or returned to clients.
+  password      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Mutation audit trail (ADR-0005). `before`/`after` hold JSON summaries of
+// product data only — never secrets (passwords, tokens, sessions).
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  /// Action id, e.g. "product.create", "product.publish", "variant.inventory".
+  action     String
+  entityType String
+  entityId   String?
+  actorEmail String
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
 }

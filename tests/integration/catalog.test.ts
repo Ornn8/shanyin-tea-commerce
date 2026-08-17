@@ -1,14 +1,18 @@
 /**
  * Catalog discovery query integration tests (ADR-0004).
  *
- * These tests create two throwaway products in `beforeAll` and remove them in
- * `afterAll`:
+ * These tests create three throwaway products in `beforeAll` and remove them
+ * in `afterAll`:
  *
  * - `demo-unavailable` — inventory 0, to prove availability filtering and
  *   "unavailable products" behavior on the shared inventory fact.
  * - `demo-fallback` — deliberately missing its `ja` localization row, to
  *   prove the documented deterministic fallback (requested locale → English →
  *   any row) for search and display.
+ * - `demo-fallback-fields` — published with an English row and zh-CN/ja rows
+ *   whose description/tasting notes are stored empty, to prove the storefront
+ *   renders the advertised field-level English fallback (never a blank
+ *   string) and that search matches that effective displayed copy.
  *
  * Test files run serially (`fileParallelism: false` in vitest.config.ts)
  * because they share one PostgreSQL database.
@@ -16,12 +20,12 @@
 import 'dotenv/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '@/lib/prisma';
-import { CATALOG_PAGE_SIZE, queryProducts } from '@/lib/products';
+import { CATALOG_PAGE_SIZE, getProductBySlug, listProducts, queryProducts } from '@/lib/products';
 
 const hasDb = Boolean(process.env.DATABASE_URL);
 const describeDb = hasDb ? describe : describe.skip;
 
-const TEMP_SLUGS = ['demo-unavailable', 'demo-fallback'] as const;
+const TEMP_SLUGS = ['demo-unavailable', 'demo-fallback', 'demo-fallback-fields'] as const;
 
 describeDb('catalog discovery query (ADR-0004)', () => {
   beforeAll(async () => {
@@ -32,13 +36,14 @@ describeDb('catalog discovery query (ADR-0004)', () => {
     await prisma.product.create({
       data: {
         slug: 'demo-unavailable',
-        sku: 'SHY-DEMO-001',
-        priceCents: 50000,
-        inventory: 0,
         origin: 'Demo origin',
         form: 'LOOSE',
         caffeine: 'LOW',
         categoryId: green.id,
+        published: true,
+        variants: {
+          create: [{ sku: 'SHY-DEMO-001', name: 'Standard', priceCents: 50000, inventory: 0 }],
+        },
         localizations: {
           create: [
             {
@@ -69,13 +74,14 @@ describeDb('catalog discovery query (ADR-0004)', () => {
     await prisma.product.create({
       data: {
         slug: 'demo-fallback',
-        sku: 'SHY-DEMO-002',
-        priceCents: 42000,
-        inventory: 5,
         origin: 'Demo origin',
         form: 'COMPRESSED',
         caffeine: 'MEDIUM',
         categoryId: oolong.id,
+        published: true,
+        variants: {
+          create: [{ sku: 'SHY-DEMO-002', name: 'Standard', priceCents: 42000, inventory: 5 }],
+        },
         localizations: {
           create: [
             {
@@ -89,6 +95,47 @@ describeDb('catalog discovery query (ADR-0004)', () => {
               name: 'Fallback Fern Tea',
               description: 'Demo listing used to prove deterministic fallback matching.',
               tastingNotes: 'Demo notes.',
+            },
+          ],
+        },
+      },
+    });
+
+    // Published product whose zh-CN/ja rows store EMPTY description and
+    // tasting notes: field validation allows that (the publication gate
+    // checks English copy only), so the storefront must render the English
+    // fallback — the same copy the merchant editor preview advertised —
+    // instead of a blank string.
+    await prisma.product.create({
+      data: {
+        slug: 'demo-fallback-fields',
+        origin: 'Demo origin',
+        form: 'LOOSE',
+        caffeine: 'LOW',
+        categoryId: oolong.id,
+        published: true,
+        variants: {
+          create: [{ sku: 'SHY-DEMO-003', name: 'Standard', priceCents: 42000, inventory: 5 }],
+        },
+        localizations: {
+          create: [
+            {
+              locale: 'zh-CN',
+              name: '字段回退演示茶',
+              description: '',
+              tastingNotes: '',
+            },
+            {
+              locale: 'en',
+              name: 'Field Fallback Fern Tea',
+              description: 'This English description is the fallback for other locales.',
+              tastingNotes: 'English tasting notes.',
+            },
+            {
+              locale: 'ja',
+              name: 'フィールド回退デモ茶',
+              description: '',
+              tastingNotes: '',
             },
           ],
         },
@@ -148,6 +195,42 @@ describeDb('catalog discovery query (ADR-0004)', () => {
     expect(zhOwn.products.some((p) => p.slug === 'demo-fallback')).toBe(true);
   });
 
+  it('storefront copy applies the advertised field-level English fallback (no blank localized copy)', async () => {
+    // zh-CN stores an empty description/tasting notes (legal by validation;
+    // the publication gate checks English only) — the storefront must render
+    // the English fallback the merchant preview advertised, never ''.
+    const zh = await getProductBySlug('demo-fallback-fields', 'zh-CN');
+    expect(zh).not.toBeNull();
+    expect(zh!.name).toBe('字段回退演示茶');
+    expect(zh!.description).toBe('This English description is the fallback for other locales.');
+    expect(zh!.tastingNotes).toBe('English tasting notes.');
+
+    // ja keeps its own title but falls back to English for the empty fields.
+    const ja = await getProductBySlug('demo-fallback-fields', 'ja');
+    expect(ja!.name).toBe('フィールド回退デモ茶');
+    expect(ja!.description).toBe('This English description is the fallback for other locales.');
+
+    // English always renders its own copy.
+    const enView = await getProductBySlug('demo-fallback-fields', 'en');
+    expect(enView!.name).toBe('Field Fallback Fern Tea');
+    expect(enView!.description).toBe('This English description is the fallback for other locales.');
+
+    // listProducts (home/cart queries) applies the same fallback.
+    const listed = (await listProducts('zh-CN')).find((p) => p.slug === 'demo-fallback-fields');
+    expect(listed?.name).toBe('字段回退演示茶');
+    expect(listed?.description).toBe('This English description is the fallback for other locales.');
+
+    // Search matches the copy the page DISPLAYS: the zh-CN page shows the
+    // English fallback description, so its English text finds the product…
+    const byEnglish = await queryProducts({ locale: 'zh-CN', q: 'fallback for other locales' });
+    expect(byEnglish.products.some((p) => p.slug === 'demo-fallback-fields')).toBe(true);
+
+    // …and a locale's own stored copy is never matched when it is not the
+    // effective copy (the en page renders English, not the zh-CN title).
+    const zhTextOnEn = await queryProducts({ locale: 'en', q: '字段回退' });
+    expect(zhTextOnEn.products.some((p) => p.slug === 'demo-fallback-fields')).toBe(false);
+  });
+
   it('empty results are deterministic for nonsense or impossible filters', async () => {
     const none = await queryProducts({ locale: 'en', q: 'zzz-no-such-tea' });
     expect(none.total).toBe(0);
@@ -186,7 +269,7 @@ describeDb('catalog discovery query (ADR-0004)', () => {
     // Default page size applies when omitted; totals include the fixtures.
     const defaults = await queryProducts({ locale: 'en' });
     expect(defaults.pageSize).toBe(CATALOG_PAGE_SIZE);
-    expect(defaults.total).toBe(8);
+    expect(defaults.total).toBe(9);
   });
 
   it('sorts by price and localized name deterministically', async () => {

@@ -3,7 +3,10 @@
 A production-shaped vertical slice for a single-merchant tea storefront under the working brand
 **Shanyin Tea** (山隐茶事). A visitor can open the home page, switch among Simplified Chinese,
 English, and Japanese, and search and filter seeded demo tea products — served from PostgreSQL
-through the real application stack — with shareable, URL-encoded discovery state.
+through the real application stack — with shareable, URL-encoded discovery state. The merchant
+can sign in through a protected administration surface (ADR-0005) to manage products, variants,
+prices, inventory, publication state, and per-locale content in one workflow, with an audit
+trail for every mutation.
 
 > ⚠️ **Demo content.** All commercial claims, certifications, origins, prices, and imagery in
 > this repository are replaceable placeholders until the merchant supplies verified assets.
@@ -57,6 +60,11 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
 | `/…/products/:slug`            | Product detail + add-to-cart                   |
 | `/…/search?q=…`                | Search results with the same discovery view    |
 | `/…/cart`                      | Demo cart (cookie-persisted, no checkout)      |
+| `/admin/login`                 | Merchant sign-in (public registration disabled)|
+| `/admin/products`              | Merchant product list (protected)              |
+| `/admin/products/new`          | Create a product draft (protected)             |
+| `/admin/products/:id`          | Full product editor (protected)                |
+| `/api/auth/[...all]`           | better-auth HTTP surface (sign-in/out/session) |
 
 Both `/…/products` and `/…/search` share one server-backed discovery view. Search intent,
 filters, sort order, and page are encoded in the URL — `q`, `category`, `form`
@@ -75,9 +83,12 @@ and `page` — so results survive refresh, back/forward navigation, and locale s
 | `pnpm i18n:check`    | Validate catalogs (see below)                       |
 | `pnpm test`          | Vitest unit + integration tests                     |
 | `pnpm build`         | Production build                                    |
-| `pnpm e2e`           | Playwright smoke (desktop 1440×900 + mobile 390×844)|
+| `pnpm e2e`           | Playwright (storefront + merchant admin journeys)   |
 | `pnpm prisma:migrate`| Apply migrations                                    |
-| `pnpm db:seed`       | Seed the demo catalog                               |
+| `pnpm db:seed`       | Seed the demo catalog + the admin account           |
+
+The demo merchant credentials live in `.env` (`ADMIN_EMAIL` / `ADMIN_PASSWORD`,
+see [.env.example](./.env.example)); the admin area is at `/admin`.
 
 ## Documentation
 
@@ -90,7 +101,11 @@ and `page` — so results survive refresh, back/forward navigation, and locale s
   - `0003-commerce-data-and-currency.md` — language-neutral facts vs. localized copy, CNY.
   - `0004-catalog-discovery-url-state.md` — URL-encoded search/filter/sort/page state,
     locale-scoped search with a deterministic fallback.
+  - `0005-merchant-administration-and-audit.md` — better-auth, the allowlisted admin,
+    variants/inventory rules, publication lifecycle, and the audit trail.
 - [docs/DSH-IMPLEMENTATION-RECEIPT.md](./docs/DSH-IMPLEMENTATION-RECEIPT.md) — implementation
   receipt for Issue #1 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-2.md](./docs/DSH-IMPLEMENTATION-RECEIPT-2.md) — implementation
   receipt for Issue #2 (model + reasoning, no fallback).
+- [docs/DSH-IMPLEMENTATION-RECEIPT-3.md](./docs/DSH-IMPLEMENTATION-RECEIPT-3.md) — implementation
+  receipt for Issue #3 (model + reasoning, no fallback).

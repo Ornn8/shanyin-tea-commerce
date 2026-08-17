@@ -13,6 +13,7 @@ export const ja = {
   'nav.home': 'ホーム',
   'nav.products': '茶葉一覧',
   'nav.cart': 'カート',
+  'merchant.signIn': '販売元サインイン',
   'locale.switchLabel': '言語',
   'locale.switchTo': '言語を切り替える',
   'home.heroTitle': '毎日の一杯に、静かな茶屋を',

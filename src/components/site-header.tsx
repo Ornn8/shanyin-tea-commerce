@@ -71,6 +71,13 @@ export function SiteHeader({ locale, t }: SiteHeaderProps) {
             <Link href={`/${locale}/products`} className="text-stone-700 transition-colors hover:text-pine-700">
               {t('nav.products')}
             </Link>
+            <Link
+              href="/admin"
+              className="text-stone-400 transition-colors hover:text-pine-700"
+              title="Merchant administration (protected)"
+            >
+              {t('merchant.signIn')}
+            </Link>
           </nav>
           <div className="ml-auto w-full sm:w-auto">
             <SearchBar

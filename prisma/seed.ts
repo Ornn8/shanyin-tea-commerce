@@ -5,8 +5,13 @@
  * content. See PRODUCT.md for the merchant facts/assets still required
  * before production. No certification, health, scarcity, or sustainability
  * claims are made anywhere in this repository.
+ *
+ * Also seeds the single allowlisted merchant administrator (ADR-0005):
+ * credentials come from ADMIN_EMAIL / ADMIN_PASSWORD (see .env.example).
+ * Public sign-up is disabled, so this seeded account is the only way in.
  */
 import 'dotenv/config';
+import { hashPassword } from 'better-auth/crypto';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
@@ -21,17 +26,23 @@ interface CategorySeed {
   names: Record<LocaleSeed, string>;
 }
 
-interface ProductSeed {
-  slug: string;
+interface VariantSeed {
   sku: string;
+  /** Language-neutral variant name (package/size label; not localized copy). */
+  name: string;
   priceCents: number;
   inventory: number;
+}
+
+interface ProductSeed {
+  slug: string;
   origin: string;
   /** Language-neutral leaf form fact (demo placeholder). */
   form: 'LOOSE' | 'COMPRESSED';
   /** Language-neutral caffeine fact (demo placeholder). */
   caffeine: 'LOW' | 'MEDIUM' | 'HIGH';
   categorySlug: string;
+  variants: VariantSeed[];
   copy: Record<LocaleSeed, { name: string; description: string; tastingNotes: string }>;
 }
 
@@ -44,13 +55,11 @@ const categories: CategorySeed[] = [
 const products: ProductSeed[] = [
   {
     slug: 'spring-longjing',
-    sku: 'SHY-G-001',
-    priceCents: 128000,
-    inventory: 40,
     origin: 'Longjing Village, Hangzhou, Zhejiang',
     form: 'LOOSE',
     caffeine: 'HIGH',
     categorySlug: 'green-tea',
+    variants: [{ sku: 'SHY-G-001', name: 'Standard', priceCents: 128000, inventory: 40 }],
     copy: {
       'zh-CN': {
         name: '西湖龙井 · 明前',
@@ -76,13 +85,11 @@ const products: ProductSeed[] = [
   },
   {
     slug: 'biluochun',
-    sku: 'SHY-G-002',
-    priceCents: 96000,
-    inventory: 25,
     origin: 'Dongting Mountain, Suzhou, Jiangsu',
     form: 'LOOSE',
     caffeine: 'MEDIUM',
     categorySlug: 'green-tea',
+    variants: [{ sku: 'SHY-G-002', name: 'Standard', priceCents: 96000, inventory: 25 }],
     copy: {
       'zh-CN': {
         name: '碧螺春',
@@ -106,13 +113,11 @@ const products: ProductSeed[] = [
   },
   {
     slug: 'tieguanyin',
-    sku: 'SHY-O-001',
-    priceCents: 88000,
-    inventory: 60,
     origin: 'Anxi County, Fujian',
     form: 'LOOSE',
     caffeine: 'MEDIUM',
     categorySlug: 'oolong-tea',
+    variants: [{ sku: 'SHY-O-001', name: 'Standard', priceCents: 88000, inventory: 60 }],
     copy: {
       'zh-CN': {
         name: '安溪铁观音',
@@ -136,13 +141,11 @@ const products: ProductSeed[] = [
   },
   {
     slug: 'dahongpao',
-    sku: 'SHY-O-002',
-    priceCents: 168000,
-    inventory: 12,
     origin: 'Wuyi Mountain, Fujian',
     form: 'LOOSE',
     caffeine: 'MEDIUM',
     categorySlug: 'oolong-tea',
+    variants: [{ sku: 'SHY-O-002', name: 'Standard', priceCents: 168000, inventory: 12 }],
     copy: {
       'zh-CN': {
         name: '武夷大红袍',
@@ -166,13 +169,11 @@ const products: ProductSeed[] = [
   },
   {
     slug: 'liubao',
-    sku: 'SHY-D-001',
-    priceCents: 72000,
-    inventory: 30,
     origin: 'Liubao Town, Wuzhou, Guangxi',
     form: 'COMPRESSED',
     caffeine: 'LOW',
     categorySlug: 'dark-tea',
+    variants: [{ sku: 'SHY-D-001', name: 'Standard', priceCents: 72000, inventory: 30 }],
     copy: {
       'zh-CN': {
         name: '六堡茶',
@@ -196,13 +197,11 @@ const products: ProductSeed[] = [
   },
   {
     slug: 'ripe-puerh',
-    sku: 'SHY-D-002',
-    priceCents: 64000,
-    inventory: 18,
     origin: 'Menghai, Yunnan',
     form: 'COMPRESSED',
     caffeine: 'LOW',
     categorySlug: 'dark-tea',
+    variants: [{ sku: 'SHY-D-002', name: 'Standard', priceCents: 64000, inventory: 18 }],
     copy: {
       'zh-CN': {
         name: '云南熟普',
@@ -226,47 +225,57 @@ const products: ProductSeed[] = [
   },
 ];
 
-async function main() {
+async function seedCategories() {
   for (const category of categories) {
-    await prisma.category.upsert({
+    const dbCategory = await prisma.category.upsert({
       where: { slug: category.slug },
       update: { sortOrder: category.sortOrder },
       create: { slug: category.slug, sortOrder: category.sortOrder },
     });
     for (const [locale, name] of Object.entries(category.names) as [LocaleSeed, string][]) {
       await prisma.categoryLocalization.upsert({
-        where: { categoryId_locale: { categoryId: (await prisma.category.findUniqueOrThrow({ where: { slug: category.slug } })).id, locale } },
+        where: { categoryId_locale: { categoryId: dbCategory.id, locale } },
         update: { name },
-        create: { categoryId: (await prisma.category.findUniqueOrThrow({ where: { slug: category.slug } })).id, locale, name },
+        create: { categoryId: dbCategory.id, locale, name },
       });
     }
   }
+  return categories.length;
+}
 
+async function seedProducts() {
   for (const product of products) {
     const category = await prisma.category.findUniqueOrThrow({ where: { slug: product.categorySlug } });
-    await prisma.product.upsert({
+    const dbProduct = await prisma.product.upsert({
       where: { slug: product.slug },
       update: {
-        sku: product.sku,
-        priceCents: product.priceCents,
-        inventory: product.inventory,
         origin: product.origin,
         form: product.form,
         caffeine: product.caffeine,
         categoryId: category.id,
+        // The demo catalog is the storefront's seed truth: reseeding re-
+        // publishes demo products the merchant may have unpublished.
+        published: true,
       },
       create: {
         slug: product.slug,
-        sku: product.sku,
-        priceCents: product.priceCents,
-        inventory: product.inventory,
         origin: product.origin,
         form: product.form,
         caffeine: product.caffeine,
         categoryId: category.id,
+        published: true,
+        publishedAt: new Date(),
       },
     });
-    const dbProduct = await prisma.product.findUniqueOrThrow({ where: { slug: product.slug } });
+
+    for (const variant of product.variants) {
+      await prisma.productVariant.upsert({
+        where: { sku: variant.sku },
+        update: { productId: dbProduct.id, name: variant.name, priceCents: variant.priceCents, inventory: variant.inventory },
+        create: { productId: dbProduct.id, ...variant },
+      });
+    }
+
     for (const [locale, copy] of Object.entries(product.copy) as [LocaleSeed, (typeof product.copy)['en']][]) {
       await prisma.productLocalization.upsert({
         where: { productId_locale: { productId: dbProduct.id, locale } },
@@ -275,12 +284,54 @@ async function main() {
       });
     }
   }
+  return products.length;
+}
+
+async function seedAdmin() {
+  const adminEmail = process.env.ADMIN_EMAIL ?? 'merchant@shanyin.example';
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminPassword) {
+    console.warn(
+      'ADMIN_PASSWORD is not set — skipping the merchant administrator seed (see .env.example).',
+    );
+    return 0;
+  }
+  const password = await hashPassword(adminPassword);
+  const user = await prisma.user.upsert({
+    where: { email: adminEmail },
+    update: { name: 'Merchant', password },
+    create: { email: adminEmail, name: 'Merchant', password, emailVerified: true },
+  });
+  // better-auth verifies email/password sign-in through the "credential"
+  // account row (providerId "credential"); the user.password column is the
+  // same scrypt hash and is kept in sync.
+  await prisma.account.upsert({
+    where: { id: `credential-${user.id}` },
+    update: { password },
+    create: {
+      id: `credential-${user.id}`,
+      userId: user.id,
+      providerId: 'credential',
+      accountId: adminEmail,
+      password,
+    },
+  });
+  return 1;
+}
+
+async function main() {
+  const categoryCount = await seedCategories();
+  const productCount = await seedProducts();
+  const adminCount = await seedAdmin();
 
   const summary = await prisma.product.findMany({
-    include: { localizations: true, category: { include: { localizations: true } } },
+    include: { localizations: true, variants: true },
   });
   console.log(
-    `Seeded ${categories.length} categories and ${summary.length} products (${summary.reduce((n, p) => n + p.localizations.length, 0)} localizations).`,
+    `Seeded ${categoryCount} categories, ${productCount} products ` +
+      `(${summary.reduce((n, p) => n + p.localizations.length, 0)} localizations, ` +
+      `${summary.reduce((n, p) => n + p.variants.length, 0)} variants), ` +
+      `${adminCount} merchant administrator(s).`,
   );
 }
 

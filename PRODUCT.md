@@ -15,8 +15,11 @@ is **demo content** unless explicitly marked otherwise.
    merchant verification.
 3. **Facts are language-neutral.** Product identifiers (slug, SKU), prices, inventory, origin,
    leaf form, and caffeine level are stored once and shared across all three locales (see
-   `docs/adr/0003-commerce-data-and-currency.md` and `docs/adr/0004-catalog-discovery-url-state.md`).
-   Only product copy (name, description, tasting notes) is localized; the display labels for
+   `docs/adr/0003-commerce-data-and-currency.md`, `docs/adr/0004-catalog-discovery-url-state.md`,
+   and `docs/adr/0005-merchant-administration-and-audit.md`). Prices and inventory now live on
+   language-neutral **variants** (`ProductVariant`: globally unique SKU, integer-cents CNY
+   price, non-negative inventory); the storefront shows the first-created variant. Only
+   product copy (name, description, tasting notes) is localized; the display labels for
    leaf form and caffeine are localized message keys (`catalog.form.*`, `catalog.caffeine.*`).
 
 ## Demo catalog (seeded by `prisma db seed`)
@@ -43,6 +46,15 @@ documented deterministic fallback (see `docs/adr/0004-catalog-discovery-url-stat
 
 Descriptions and tasting notes in the seed are deliberately generic ("Demo listing…",
 "Demo notes…") so no prose can be mistaken for a verified claim.
+
+## Merchant administration (Issue #3)
+
+The merchant area (`/admin`, protected) manages products end to end: shared facts, variants,
+integer-minor-unit CNY prices, inventory, publication state, and per-locale content. Only
+**published** products appear on the storefront. Every mutation is audited (actor, timestamp,
+entity, before/after summary) and never stores secrets. The demo credentials live in `.env`
+(`ADMIN_EMAIL` / `ADMIN_PASSWORD`, see `.env.example`); public registration is disabled and
+the seed creates the single allowlisted administrator. See `docs/adr/0005-merchant-administration-and-audit.md`.
 
 ## Merchant facts and assets still required for production
 

@@ -31,6 +31,11 @@ jobs:
           --health-retries 12
     env:
       DATABASE_URL: postgresql://shanyin:shanyin@localhost:5432/shanyin?schema=public
+      # Merchant administrator seeded by `pnpm db:seed` and used by the
+      # Playwright admin journeys to sign in (ADR-0005).
+      ADMIN_EMAIL: merchant@shanyin.example
+      ADMIN_PASSWORD: ci-shanyin-admin-2026-demo
+      AUTH_SECRET: ci-shanyin-auth-secret-4f2d1a77c3f8-change-r4
     steps:
       - name: Checkout
         uses: actions/checkout@v4
