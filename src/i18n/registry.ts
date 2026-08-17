@@ -38,6 +38,7 @@ export const MESSAGE_PARAMS: Readonly<Record<string, readonly string[]>> = {
   'search.noResults': ['query'],
   'catalog.resultsCount': ['count'],
   'catalog.pageOf': ['page', 'pages'],
+  'product.mediaAlt': ['name'],
 };
 
 export interface LocaleMeta {

@@ -16,11 +16,14 @@ is **demo content** unless explicitly marked otherwise.
 3. **Facts are language-neutral.** Product identifiers (slug, SKU), prices, inventory, origin,
    leaf form, and caffeine level are stored once and shared across all three locales (see
    `docs/adr/0003-commerce-data-and-currency.md`, `docs/adr/0004-catalog-discovery-url-state.md`,
-   and `docs/adr/0005-merchant-administration-and-audit.md`). Prices and inventory now live on
-   language-neutral **variants** (`ProductVariant`: globally unique SKU, integer-cents CNY
-   price, non-negative inventory); the storefront shows the first-created variant. Only
-   product copy (name, description, tasting notes) is localized; the display labels for
-   leaf form and caffeine are localized message keys (`catalog.form.*`, `catalog.caffeine.*`).
+   `docs/adr/0005-merchant-administration-and-audit.md`, and
+   `docs/adr/0006-product-detail-variants.md`). Prices and inventory live on language-neutral
+   **variants** (`ProductVariant`: globally unique SKU, integer-cents CNY price, non-negative
+   inventory); the catalog and cart show the first-created variant, and the product detail
+   page lets the shopper select any variant (package size). Only product copy (name,
+   description, tasting notes, brewing guidance, SEO text, media alt) is localized; the
+   display labels for leaf form and caffeine are localized message keys
+   (`catalog.form.*`, `catalog.caffeine.*`).
 
 ## Demo catalog (seeded by `prisma db seed`)
 
@@ -35,6 +38,33 @@ All prices are in CNY (¥), stored as integer cents (`priceCents`), displayed wi
 | 4 | `dahongpao`      | SHY-O-002  | Dahongpao Rock Tea / 武夷大红袍 / 武夷山大紅袍 | 1,680.00 | 12 | Loose | Medium | Wuyi Mountain, Fujian                | Oolong tea |
 | 5 | `liubao`         | SHY-D-001  | Liubao Dark Tea / 六堡茶 / 六堡茶 | 720.00  | 30 | Compressed | Low | Liubao Town, Wuzhou, Guangxi         | Dark tea |
 | 6 | `ripe-puerh`     | SHY-D-002  | Ripe Pu-erh / 云南熟普 / 熟プーアル茶 | 640.00 | 18 | Compressed | Low | Menghai, Yunnan                      | Dark tea |
+
+The **Price/Inventory** columns above show the **first-created variant** — the storefront
+default used by catalog cards and cart totals. Every product also carries additional
+package-size variants selectable on the detail page (ADR-0006):
+
+**Demo variants (all demo facts; SKUs are stable and language-neutral)**
+
+| Product        | Variant SKU      | Size  | Price (¥) | Inventory | Note                     |
+| -------------- | ---------------- | ----- | --------- | --------- | ------------------------ |
+| spring-longjing| `SHY-G-001`      | 100g  | 1,280.00  | 40        | Default                  |
+| spring-longjing| `SHY-G-001-250`  | 250g  | 3,200.00  | 6         | —                        |
+| spring-longjing| `SHY-G-001-50`   | 50g   | 640.00    | 0         | **Unavailable**          |
+| biluochun      | `SHY-G-002`      | 100g  | 960.00    | 25        | Default                  |
+| biluochun      | `SHY-G-002-50`   | 50g   | 480.00    | 10        | —                        |
+| biluochun      | `SHY-G-002-250`  | 250g  | 2,400.00  | 0         | **Unavailable**          |
+| tieguanyin     | `SHY-O-001`      | 100g  | 880.00    | 60        | Default                  |
+| tieguanyin     | `SHY-O-001-50`   | 50g   | 440.00    | 18        | —                        |
+| tieguanyin     | `SHY-O-001-250`  | 250g  | 2,200.00  | 12        | —                        |
+| dahongpao      | `SHY-O-002`      | 100g  | 1,680.00  | 12        | Default                  |
+| dahongpao      | `SHY-O-002-50`   | 50g   | 840.00    | 20        | —                        |
+| dahongpao      | `SHY-O-002-250`  | 250g  | 4,200.00  | 4         | **Low stock** (≤ 5)      |
+| liubao         | `SHY-D-001`      | 200g  | 720.00    | 30        | Default                  |
+| liubao         | `SHY-D-001-500`  | 500g  | 1,800.00  | 14        | —                        |
+| liubao         | `SHY-D-001-1000` | 1kg   | 3,600.00  | 8         | —                        |
+| ripe-puerh     | `SHY-D-002`      | 200g  | 640.00    | 18        | Default                  |
+| ripe-puerh     | `SHY-D-002-500`  | 500g  | 1,600.00  | 10        | —                        |
+| ripe-puerh     | `SHY-D-002-1000` | 1kg   | 3,200.00  | 3         | **Low stock** (≤ 5)      |
 
 Categories: `green-tea` (绿茶 / Green tea / 緑茶), `oolong-tea` (乌龙茶 / Oolong tea / 烏龍茶),
 `dark-tea` (黑茶 / Dark tea / 黒茶).
@@ -70,6 +100,11 @@ list is the acceptance checklist for the "explicit list of merchant facts/assets
 - [ ] Verified leaf form and caffeine levels for every product (current values are demo
       placeholders; their display labels are localized message keys)
 - [ ] Verified descriptions and tasting notes (all three locales)
+- [ ] Verified brewing guidance, SEO title/description, and media alt text — the detail page
+      renders these with the documented English fallback until supplied (ADR-0006)
+- [ ] Verified package-size variants: real sizes, stable SKUs, prices, and inventory per
+      variant (current sizes/SKUs/prices are demo placeholders; low-stock and unavailable
+      demo states are synthetic)
 - [ ] Any certifications or quality claims the merchant can actually substantiate — and
       removal of all demo tags once real facts exist
 - [ ] SKU/identifier policy (the demo SKU scheme `SHY-*` is a placeholder)
@@ -86,6 +121,9 @@ list is the acceptance checklist for the "explicit list of merchant facts/assets
 
 **Storefront**
 
+- [ ] Structured data (JSON-LD) currently emits only verified seeded facts — canonical URL,
+      SKU, displayed price/availability, and the working brand name — with no ratings,
+      reviews, GTINs, or claims; extend it as real assets arrive (ADR-0006)
 - [ ] Confirm the locale set (zh-CN, en, ja) and the default locale (currently zh-CN)
 - [ ] Confirm the fallback-locale policy (currently: English for deliberately missing optional keys)
 - [ ] Decide whether any optional message keys (e.g. `home.announcement`) should ship in all locales

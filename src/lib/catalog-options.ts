@@ -7,6 +7,19 @@
  */
 export const CATALOG_PAGE_SIZE = 4;
 
+/**
+ * Inventory threshold (inclusive) below which a variant is shown as
+ * "low stock" on the product detail page (ADR-0006). The threshold is a
+ * language-neutral fact of the shared inventory value — never a localized
+ * string — and is unit-tested at its boundaries.
+ */
+export const LOW_STOCK_THRESHOLD = 5;
+
+/** True for an in-stock variant whose inventory is at or below the threshold. */
+export function isLowStock(inventory: number): boolean {
+  return inventory > 0 && inventory <= LOW_STOCK_THRESHOLD;
+}
+
 /** Canonical URL ids for leaf form (labels are i18n keys, values are language-neutral). */
 export const PRODUCT_FORMS = ['loose', 'compressed'] as const;
 export type ProductFormId = (typeof PRODUCT_FORMS)[number];

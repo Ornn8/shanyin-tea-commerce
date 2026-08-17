@@ -42,8 +42,15 @@ interface ProductSeed {
   /** Language-neutral caffeine fact (demo placeholder). */
   caffeine: 'LOW' | 'MEDIUM' | 'HIGH';
   categorySlug: string;
+  /**
+   * Variants in seed order; the FIRST entry becomes the storefront default
+   * (first-created) variant shown by catalog cards and cart totals (ADR-0005).
+   * Later entries are package sizes a shopper can select on the detail page
+   * (ADR-0006) — including demo low-stock and out-of-stock states, which are
+   * derived from the shared integer inventory fact, never per-locale.
+   */
   variants: VariantSeed[];
-  copy: Record<LocaleSeed, { name: string; description: string; tastingNotes: string }>;
+  copy: Record<LocaleSeed, { name: string; description: string; tastingNotes: string; brewingNotes: string }>;
 }
 
 const categories: CategorySeed[] = [
@@ -59,13 +66,19 @@ const products: ProductSeed[] = [
     form: 'LOOSE',
     caffeine: 'HIGH',
     categorySlug: 'green-tea',
-    variants: [{ sku: 'SHY-G-001', name: 'Standard', priceCents: 128000, inventory: 40 }],
+    variants: [
+      { sku: 'SHY-G-001', name: '100g', priceCents: 128000, inventory: 40 },
+      { sku: 'SHY-G-001-250', name: '250g', priceCents: 320000, inventory: 6 },
+      { sku: 'SHY-G-001-50', name: '50g', priceCents: 64000, inventory: 0 },
+    ],
     copy: {
       'zh-CN': {
         name: '西湖龙井 · 明前',
         description:
           '演示条目：扁平炒青绿茶，豆香清雅。产地、采摘时间与风味描述均待商户核实后替换。',
         tastingNotes: '演示笔记：清豆香，回甘平稳。请以商户提供的品鉴记录为准。',
+        brewingNotes:
+          '演示冲泡建议：取适量茶叶，以适温清水冲泡，时间依个人口味调整。具体参数待商户核实后补充。',
       },
       en: {
         name: 'Spring Longjing',
@@ -73,6 +86,8 @@ const products: ProductSeed[] = [
           'Demo listing: a pan-fired flat green tea with a clean, chestnut-like aroma. Origin, picking date, and flavor copy are placeholders pending merchant verification.',
         tastingNotes:
           'Demo notes: clean bean-like aroma, steady sweet finish. Replace with merchant-verified tasting notes.',
+        brewingNotes:
+          'Demo brewing note: steep with water at a moderate temperature and adjust the time to taste. Exact parameters pending merchant verification.',
       },
       ja: {
         name: '西湖龍井・明前',
@@ -80,6 +95,8 @@ const products: ProductSeed[] = [
           'デモ商品：釜炒り仕上げの平たい緑茶で、すっきりとした栗のような香り。産地・摘採時期・風味の記載はすべて仮内容で、販売元による確認後に差し替えます。',
         tastingNotes:
           'デモ備考：すっきりとした香ばしさと穏やかな甘み。販売元確認済みのテイスティングノートに差し替えます。',
+        brewingNotes:
+          'デモの淹れ方の目安：適温のお湯で淹れ、時間はお好みで調整してください。詳細は販売元確認後に追記します。',
       },
     },
   },
@@ -89,25 +106,35 @@ const products: ProductSeed[] = [
     form: 'LOOSE',
     caffeine: 'MEDIUM',
     categorySlug: 'green-tea',
-    variants: [{ sku: 'SHY-G-002', name: 'Standard', priceCents: 96000, inventory: 25 }],
+    variants: [
+      { sku: 'SHY-G-002', name: '100g', priceCents: 96000, inventory: 25 },
+      { sku: 'SHY-G-002-50', name: '50g', priceCents: 48000, inventory: 10 },
+      { sku: 'SHY-G-002-250', name: '250g', priceCents: 240000, inventory: 0 },
+    ],
     copy: {
       'zh-CN': {
         name: '碧螺春',
         description:
           '演示条目：卷曲细嫩的炒青绿茶，花果气息。产地与工艺描述待商户核实后替换。',
         tastingNotes: '演示笔记：清香鲜爽。请以商户提供的品鉴记录为准。',
+        brewingNotes:
+          '演示冲泡建议：取适量茶叶，以适温清水冲泡，时间依个人口味调整。具体参数待商户核实后补充。',
       },
       en: {
         name: 'Biluochun',
         description:
           'Demo listing: a tightly curled green tea with a gentle floral-fruity note. Origin and process copy are placeholders pending merchant verification.',
         tastingNotes: 'Demo notes: fresh, brisk, delicately floral. Replace with merchant-verified tasting notes.',
+        brewingNotes:
+          'Demo brewing note: steep with water at a moderate temperature and adjust the time to taste. Exact parameters pending merchant verification.',
       },
       ja: {
         name: '碧螺春',
         description:
           'デモ商品：細く巻いた緑茶で、やさしい花果の香り。産地・製法の記載は仮内容で、販売元による確認後に差し替えます。',
         tastingNotes: 'デモ備考：みずみずしく爽やかな味わい。販売元確認済みのテイスティングノートに差し替えます。',
+        brewingNotes:
+          'デモの淹れ方の目安：適温のお湯で淹れ、時間はお好みで調整してください。詳細は販売元確認後に追記します。',
       },
     },
   },
@@ -117,25 +144,35 @@ const products: ProductSeed[] = [
     form: 'LOOSE',
     caffeine: 'MEDIUM',
     categorySlug: 'oolong-tea',
-    variants: [{ sku: 'SHY-O-001', name: 'Standard', priceCents: 88000, inventory: 60 }],
+    variants: [
+      { sku: 'SHY-O-001', name: '100g', priceCents: 88000, inventory: 60 },
+      { sku: 'SHY-O-001-50', name: '50g', priceCents: 44000, inventory: 18 },
+      { sku: 'SHY-O-001-250', name: '250g', priceCents: 220000, inventory: 12 },
+    ],
     copy: {
       'zh-CN': {
         name: '安溪铁观音',
         description:
           '演示条目：清香型乌龙茶，兰花香明显。产地与工艺描述待商户核实后替换。',
         tastingNotes: '演示笔记：兰花香，汤感清透。请以商户提供的品鉴记录为准。',
+        brewingNotes:
+          '演示冲泡建议：取适量茶叶，以适温清水冲泡，时间依个人口味调整。具体参数待商户核实后补充。',
       },
       en: {
         name: 'Tieguanyin Oolong',
         description:
           'Demo listing: a lightly oxidized oolong with a pronounced orchid-like aroma. Origin and process copy are placeholders pending merchant verification.',
         tastingNotes: 'Demo notes: orchid aroma, clear bright liquor. Replace with merchant-verified tasting notes.',
+        brewingNotes:
+          'Demo brewing note: steep with water at a moderate temperature and adjust the time to taste. Exact parameters pending merchant verification.',
       },
       ja: {
         name: '安渓鉄観音',
         description:
           'デモ商品：軽発酵の烏龍茶で、蘭を思わせる香り。産地・製法の記載は仮内容で、販売元による確認後に差し替えます。',
         tastingNotes: 'デモ備考：蘭の香り、明るく澄んだ水色。販売元確認済みのテイスティングノートに差し替えます。',
+        brewingNotes:
+          'デモの淹れ方の目安：適温のお湯で淹れ、時間はお好みで調整してください。詳細は販売元確認後に追記します。',
       },
     },
   },
@@ -145,25 +182,35 @@ const products: ProductSeed[] = [
     form: 'LOOSE',
     caffeine: 'MEDIUM',
     categorySlug: 'oolong-tea',
-    variants: [{ sku: 'SHY-O-002', name: 'Standard', priceCents: 168000, inventory: 12 }],
+    variants: [
+      { sku: 'SHY-O-002', name: '100g', priceCents: 168000, inventory: 12 },
+      { sku: 'SHY-O-002-50', name: '50g', priceCents: 84000, inventory: 20 },
+      { sku: 'SHY-O-002-250', name: '250g', priceCents: 420000, inventory: 4 },
+    ],
     copy: {
       'zh-CN': {
         name: '武夷大红袍',
         description:
           '演示条目：岩茶风格的焙火乌龙茶，岩韵醇厚。产地与工艺描述待商户核实后替换。',
         tastingNotes: '演示笔记：焙火香，回韵沉稳。请以商户提供的品鉴记录为准。',
+        brewingNotes:
+          '演示冲泡建议：取适量茶叶，以适温清水冲泡，时间依个人口味调整。具体参数待商户核实后补充。',
       },
       en: {
         name: 'Dahongpao Rock Tea',
         description:
           'Demo listing: a roasted rock-oolong with a deep, mineral-tinged character. Origin and process copy are placeholders pending merchant verification.',
         tastingNotes: 'Demo notes: roasted depth with a mineral finish. Replace with merchant-verified tasting notes.',
+        brewingNotes:
+          'Demo brewing note: steep with water at a moderate temperature and adjust the time to taste. Exact parameters pending merchant verification.',
       },
       ja: {
         name: '武夷山大紅袍',
         description:
           'デモ商品：焙煎の効いた岩茶風烏龍茶で、深みのある味わい。産地・製法の記載は仮内容で、販売元による確認後に差し替えます。',
         tastingNotes: 'デモ備考：焙煎香と鉱物的な余韻。販売元確認済みのテイスティングノートに差し替えます。',
+        brewingNotes:
+          'デモの淹れ方の目安：適温のお湯で淹れ、時間はお好みで調整してください。詳細は販売元確認後に追記します。',
       },
     },
   },
@@ -173,25 +220,35 @@ const products: ProductSeed[] = [
     form: 'COMPRESSED',
     caffeine: 'LOW',
     categorySlug: 'dark-tea',
-    variants: [{ sku: 'SHY-D-001', name: 'Standard', priceCents: 72000, inventory: 30 }],
+    variants: [
+      { sku: 'SHY-D-001', name: '200g', priceCents: 72000, inventory: 30 },
+      { sku: 'SHY-D-001-500', name: '500g', priceCents: 180000, inventory: 14 },
+      { sku: 'SHY-D-001-1000', name: '1kg', priceCents: 360000, inventory: 8 },
+    ],
     copy: {
       'zh-CN': {
         name: '六堡茶',
         description:
           '演示条目：广西梧州六堡镇的传统后发酵黑茶，陈香温润。产地与年份描述待商户核实后替换。',
         tastingNotes: '演示笔记：陈香，汤感醇和。请以商户提供的品鉴记录为准。',
+        brewingNotes:
+          '演示冲泡建议：取适量茶叶，以适温清水冲泡，时间依个人口味调整。具体参数待商户核实后补充。',
       },
       en: {
         name: 'Liubao Dark Tea',
         description:
           'Demo listing: a traditionally fermented dark tea from Liubao, Guangxi, with a mellow aged character. Origin and vintage copy are placeholders pending merchant verification.',
         tastingNotes: 'Demo notes: mellow aged aroma, smooth rounded body. Replace with merchant-verified tasting notes.',
+        brewingNotes:
+          'Demo brewing note: steep with water at a moderate temperature and adjust the time to taste. Exact parameters pending merchant verification.',
       },
       ja: {
         name: '六堡茶',
         description:
           'デモ商品：広西梧州六堡の伝統的な後発酵茶。熟成感のあるまろやかな味わい。産地・年期の記載は仮内容で、販売元による確認後に差し替えます。',
         tastingNotes: 'デモ備考：熟成香、なめらかな口当たり。販売元確認済みのテイスティングノートに差し替えます。',
+        brewingNotes:
+          'デモの淹れ方の目安：適温のお湯で淹れ、時間はお好みで調整してください。詳細は販売元確認後に追記します。',
       },
     },
   },
@@ -201,25 +258,35 @@ const products: ProductSeed[] = [
     form: 'COMPRESSED',
     caffeine: 'LOW',
     categorySlug: 'dark-tea',
-    variants: [{ sku: 'SHY-D-002', name: 'Standard', priceCents: 64000, inventory: 18 }],
+    variants: [
+      { sku: 'SHY-D-002', name: '200g', priceCents: 64000, inventory: 18 },
+      { sku: 'SHY-D-002-500', name: '500g', priceCents: 160000, inventory: 10 },
+      { sku: 'SHY-D-002-1000', name: '1kg', priceCents: 320000, inventory: 3 },
+    ],
     copy: {
       'zh-CN': {
         name: '云南熟普',
         description:
           '演示条目：勐海熟茶，发酵圆融，枣香沉稳。产地与年份描述待商户核实后替换。',
         tastingNotes: '演示笔记：醇厚，微甜。请以商户提供的品鉴记录为准。',
+        brewingNotes:
+          '演示冲泡建议：取适量茶叶，以适温清水冲泡，时间依个人口味调整。具体参数待商户核实后补充。',
       },
       en: {
         name: 'Ripe Pu-erh',
         description:
           'Demo listing: a fully fermented pu-erh from Menghai with a deep, softly sweet character. Origin and vintage copy are placeholders pending merchant verification.',
         tastingNotes: 'Demo notes: dense and gently sweet. Replace with merchant-verified tasting notes.',
+        brewingNotes:
+          'Demo brewing note: steep with water at a moderate temperature and adjust the time to taste. Exact parameters pending merchant verification.',
       },
       ja: {
         name: '熟プーアル茶',
         description:
           'デモ商品：雲南勐海の完全発酵プーアル茶。深くやさしい甘みのある味わい。産地・年期の記載は仮内容で、販売元による確認後に差し替えます。',
         tastingNotes: 'デモ備考：濃厚でほのかに甘い。販売元確認済みのテイスティングノートに差し替えます。',
+        brewingNotes:
+          'デモの淹れ方の目安：適温のお湯で淹れ、時間はお好みで調整してください。詳細は販売元確認後に追記します。',
       },
     },
   },

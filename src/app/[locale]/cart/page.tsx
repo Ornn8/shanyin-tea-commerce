@@ -5,7 +5,7 @@ import { createT } from '@/i18n/catalog';
 import { formatCny } from '@/i18n/format';
 import { isLocaleId, type LocaleId } from '@/i18n/registry';
 import { CART_COOKIE, parseCart } from '@/lib/cart';
-import { getProductsBySkus } from '@/lib/products';
+import { getCartLines } from '@/lib/products';
 import { RemoveFromCart } from '@/components/remove-from-cart';
 
 export const dynamic = 'force-dynamic';
@@ -24,8 +24,10 @@ export default async function CartPage({ params }: CartPageProps) {
   // Next.js already percent-decodes cookie values, so the JSON array is
   // parsed directly (parseCart tolerates raw or already-decoded input).
   const skus = parseCart(cookieStore.get(CART_COOKIE)?.value);
-  const items = await getProductsBySkus(skus, locale);
-  const totalCents = items.reduce((sum, item) => sum + item.priceCents, 0);
+  // Each line resolves to the exact variant added (SKU, price, unit name), so
+  // a 250g variant shows its own price — never the product default (ADR-0006).
+  const items = await getCartLines(skus, locale);
+  const totalCents = items.reduce((sum, item) => sum + item.variant.priceCents, 0);
 
   return (
     <div className="flex flex-col gap-6 py-8">
@@ -47,25 +49,25 @@ export default async function CartPage({ params }: CartPageProps) {
           <ul className="flex flex-col gap-3" data-testid="cart-items">
             {items.map((item) => (
               <li
-                key={item.sku}
+                key={item.variant.sku}
                 className="flex items-center justify-between gap-4 rounded-lg border border-stone-200 bg-white p-4"
               >
                 <div className="min-w-0">
                   <Link
-                    href={`/${locale}/products/${item.slug}`}
+                    href={`/${locale}/products/${item.product.slug}`}
                     className="font-serif text-base font-semibold text-pine-900 hover:text-pine-700"
                   >
-                    {item.name}
+                    {item.product.name}
                   </Link>
                   <p className="mt-0.5 text-xs text-stone-500">
-                    {item.sku} · {item.origin}
+                    {item.variant.sku} · {item.variant.name} · {item.product.origin}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
-                  <span className="text-sm font-medium text-stone-800">
-                    {formatCny(item.priceCents, locale)}
+                  <span className="text-sm font-medium text-stone-800" data-testid="cart-line-price">
+                    {formatCny(item.variant.priceCents, locale)}
                   </span>
-                  <RemoveFromCart sku={item.sku} label={t('cart.remove')} />
+                  <RemoveFromCart sku={item.variant.sku} label={t('cart.remove')} />
                 </div>
               </li>
             ))}

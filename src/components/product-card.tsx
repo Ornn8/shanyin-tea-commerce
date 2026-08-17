@@ -21,7 +21,11 @@ export function ProductCard({ product, locale, t }: ProductCardProps) {
       data-testid="product-card"
     >
       <div className="relative">
-        <PlaceholderTea slug={product.slug} className="aspect-[4/3] w-full" />
+        <PlaceholderTea
+          slug={product.slug}
+          alt={t('product.mediaAlt', { name: product.name })}
+          className="aspect-[4/3] w-full"
+        />
         <span className="absolute left-2 top-2 rounded-sm bg-white/90 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-stone-500 shadow-sm">
           {t('common.demoBadge')}
         </span>

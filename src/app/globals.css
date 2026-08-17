@@ -53,6 +53,10 @@
 @layer base {
   html {
     @apply bg-stone-50 text-stone-900 antialiased;
+    /* Long unbroken tokens (half-width Latin strings inside ja/zh copy, URLs)
+       must wrap instead of overflowing narrow viewports (ADR-0006); CJK text
+       keeps its native per-character line breaking. */
+    overflow-wrap: break-word;
   }
 
   ::selection {
