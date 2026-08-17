@@ -13,6 +13,7 @@ export const zhCN = {
   'nav.home': '首页',
   'nav.products': '全部茶品',
   'nav.cart': '购物袋',
+  'merchant.signIn': '商户登录',
   'locale.switchLabel': '语言',
   'locale.switchTo': '切换语言',
   'home.heroTitle': '一间安静喝茶的小店',

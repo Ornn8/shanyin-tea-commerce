@@ -14,6 +14,7 @@ const enMessages = {
   'nav.home': 'Home',
   'nav.products': 'Catalog',
   'nav.cart': 'Cart',
+  'merchant.signIn': 'Merchant sign-in',
   'locale.switchLabel': 'Language',
   'locale.switchTo': 'Switch language',
   'home.heroTitle': 'A quiet tea house for everyday brewing',

@@ -1,0 +1,97 @@
+# DSH Implementation Receipt — Issue #3
+
+- **Repository:** Ornn8/shanyin-tea-commerce
+- **Issue:** #3 — Let the merchant manage localized products, prices, and stock
+- **Branch:** `agent/issue-3`
+- **Model:** `opencode-go/deepseek-v4-flash`
+- **Reasoning effort:** `max`
+- **Fallback policy:** No silent model fallback is accepted — every step of this
+  implementation was produced by the model identified above at `max` reasoning. If a runtime
+  or tool environment ever substitutes a different model or lower reasoning level, this
+  receipt is void and the run must be flagged.
+- **Date:** 2026-08-17
+
+## What was implemented
+
+- **Protected merchant administration surface** (`/admin/**`, ADR-0005) with a guarded route
+  group: `/admin/login` (public, sign-in only), `/admin/products`, `/admin/products/new`, and
+  `/admin/products/[id]` (full editor). Unauthenticated visitors are redirected; every server
+  action re-checks the allowlisted admin session.
+- **Maintained authentication library** — better-auth 1.6.29 (Prisma adapter, PostgreSQL)
+  with `disableSignUp` (public registration disabled; the endpoint rejects with
+  `EMAIL_PASSWORD_SIGN_UP_DISABLED`), server-side `Session` rows, an httpOnly cookie, CSRF
+  origin enforcement kept on in every environment, and the built-in rate limiter enabled
+  with a tighter `/sign-in/email` rule (10 attempts / 15 min per IP). The seed creates the
+  single allowlisted merchant administrator from `ADMIN_EMAIL` / `ADMIN_PASSWORD` (scrypt).
+- **One workflow over shared facts, variants, prices, inventory, publication state, and
+  localized content**: `Product` keeps shared facts + `published`/`publishedAt`; new
+  `ProductVariant` rows own globally unique SKUs, integer-minor-unit CNY prices, and
+  non-negative inventory (shared across locales by construction — the legacy columns were
+  migrated with a backfill). `ProductLocalization` gained brewing guidance, SEO title/
+  description, and media alt text.
+- **Editor UX**: per-locale completeness (n/7), live English-fallback previews (requested
+  locale → English → any row), per-field server validation errors, unsaved-changes
+  indicator + beforeunload warning, a coverage table, and clear shared-versus-localized
+  section boundaries. Prices are typed as yuan strings and converted to integer cents
+  without floating-point arithmetic.
+- **Publishing** requires a variant and English title/description; it computes and exposes
+  per-locale translation coverage (also snapshotted into the audit entry) and can never
+  produce duplicate SKUs, negative stock, floating-point prices, or locale-specific
+  inventory. Unpublished products are invisible to the storefront.
+- **Audit trail**: every mutation (`product.create/update/publish/unpublish`,
+  `variant.inventory`) writes an `AuditLog` row in the same transaction — actor, timestamp,
+  entity, before/after JSON summary — containing product data only, never secrets.
+- **Storefront migration**: catalog queries read the first-created variant and filter
+  `published: true`; seed, cart, and catalog fixtures updated; a localized "Merchant
+  sign-in" link appears in the header (`merchant.signIn` in all three catalogs).
+
+## Verification performed
+
+- Clean checks on Node.js 24.19.0 LTS with pnpm 11.7.0, PostgreSQL 17 via Docker Compose.
+- Migration `20260817100000_merchant_admin_variants_audit` applied; seed creates 3
+  categories, 6 products (6 variants, 18 localizations) and 1 merchant administrator.
+- `pnpm i18n:check` — 73 English source keys, 3 registered locales.
+- `pnpm lint`, `pnpm typecheck` (strict), `pnpm build` (production build, all 13 routes).
+- `pnpm test` — 77 tests (9 files), including the new admin suite: guards (no cookie /
+  forged cookie / valid session / non-allowlisted user), disabled sign-up, CSRF 403 +
+  same-origin positive control, sign-in rate-limit 429, all mutation paths with audit
+  assertions (before/after, coverage, no secrets), and the invalid-input matrix (duplicate
+  SKUs across and within payloads, negative stock, float prices, unknown locales, duplicate
+  slugs, empty variants, unpublishable products); unit tests for yuan→cents parsing,
+  slug/SKU/inventory validation, and fallback/completeness.
+- `pnpm e2e` — 36 Playwright tests across desktop (1440×900) and mobile (390×844): the new
+  admin journeys (redirect, failed/successful sign-in, create → localize → publish →
+  storefront visibility → inventory adjustment → sign-out, unpublish hiding, no horizontal
+  overflow, screenshots) plus the existing storefront smoke and discovery suites unchanged.
+
+## Acceptance mapping
+
+- Unauthorized users cannot access admin pages or mutations; public registration disabled:
+  done (guarded layout + guarded server actions + better-auth `disableSignUp`, integration
+  + e2e coverage).
+- Manage shared facts, variants, integer-minor-unit CNY prices, inventory, publication
+  state, and localized content in one workflow: done (editor + service layer).
+- Editor shows per-locale completeness, fallback previews, validation errors, unsaved
+  changes, shared-vs-localized boundaries: done (unit + e2e coverage).
+- Publishing cannot create duplicate SKUs, negative stock, floating-point prices, or
+  locale-specific inventory: done (normalization + pre-check + unique index + integer-only
+  validation + schema; integration-tested).
+- Every mutation records actor, timestamp, entity, before/after summary without secrets:
+  done (`AuditLog` in-transaction; no-secrets test).
+- CSRF/session protections, authorization checks, rate limits, invalid-input cases
+  integration-tested: done.
+- Playwright covers sign-in, create, localize, publish, inventory adjustment, sign-out at
+  desktop and mobile widths: done (`e2e/admin.spec.ts`, both projects, screenshots
+  uploaded by CI).
+- This receipt identifies `opencode-go/deepseek-v4-flash` with `max` reasoning, no fallback:
+  done.
+
+## Caveats (recorded, not blocking)
+
+- The rate-limit store is in-memory (per process); a multi-instance deployment should move
+  it to shared storage. Secure-cookie behavior follows the request protocol (enable TLS +
+  `BETTER_AUTH_URL` for production).
+- Seed reseeding re-publishes demo products the merchant may have unpublished (documented
+  in `prisma/seed.ts`).
+- The storefront displays the first-created variant only; multi-variant display is out of
+  scope for this slice (ADR-0005).

@@ -78,15 +78,26 @@ function pickLocalization<T extends { locale: string }>(
   );
 }
 
+/**
+ * The variant a shopper sees: the product's first-created variant. The
+ * storefront intentionally reads language-neutral facts (SKU, integer-cents
+ * price, inventory) from variants only (ADR-0005); unpublished products are
+ * never returned.
+ */
+function primaryVariant(row: ProductRow) {
+  return row.variants[0];
+}
+
 export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
   const loc = pickLocalization(row.localizations, locale);
   const catLoc = pickLocalization(row.category.localizations, locale);
+  const variant = primaryVariant(row);
   return {
     id: row.id,
     slug: row.slug,
-    sku: row.sku,
-    priceCents: row.priceCents,
-    inventory: row.inventory,
+    sku: variant?.sku ?? '',
+    priceCents: variant?.priceCents ?? 0,
+    inventory: variant?.inventory ?? 0,
     origin: row.origin,
     form: FORM_FROM_ENUM[row.form] ?? 'loose',
     caffeine: CAFFEINE_FROM_ENUM[row.caffeine] ?? 'medium',
@@ -100,9 +111,12 @@ export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
 
 function findProductRow() {
   return prisma.product.findMany({
+    // Only published products exist on the storefront (ADR-0005).
+    where: { published: true },
     include: {
       localizations: true,
       category: { include: { localizations: true } },
+      variants: { orderBy: { createdAt: 'asc' } },
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -115,10 +129,11 @@ export async function listProducts(locale: LocaleId): Promise<ProductView[]> {
 
 export async function getProductBySlug(slug: string, locale: LocaleId): Promise<ProductView | null> {
   const row = await prisma.product.findUnique({
-    where: { slug },
+    where: { slug, published: true },
     include: {
       localizations: true,
       category: { include: { localizations: true } },
+      variants: { orderBy: { createdAt: 'asc' } },
     },
   });
   return row ? toProductView(row, locale) : null;
@@ -127,13 +142,20 @@ export async function getProductBySlug(slug: string, locale: LocaleId): Promise<
 export async function getProductsBySkus(skus: string[], locale: LocaleId): Promise<ProductView[]> {
   if (skus.length === 0) return [];
   const rows = await prisma.product.findMany({
-    where: { sku: { in: skus } },
+    where: { published: true, variants: { some: { sku: { in: skus } } } },
     include: {
       localizations: true,
       category: { include: { localizations: true } },
+      variants: { orderBy: { createdAt: 'asc' } },
     },
   });
-  const bySku = new Map(rows.map((row) => [row.sku, toProductView(row, locale)]));
+  const bySku = new Map<string, ProductView>();
+  for (const row of rows) {
+    const view = toProductView(row, locale);
+    for (const variant of row.variants) {
+      bySku.set(variant.sku, view);
+    }
+  }
   // Preserve cart order.
   return skus.flatMap((sku) => (bySku.get(sku) ? [bySku.get(sku)!] : []));
 }
@@ -231,6 +253,7 @@ export async function queryProducts(query: CatalogQuery): Promise<CatalogResult>
   const q = (query.q ?? '').trim().toLocaleLowerCase();
 
   const matched = rows.filter((row) => {
+    const variant = primaryVariant(row);
     if (q) {
       const loc = pickLocalization(row.localizations, locale);
       const name = (loc?.name ?? '').toLocaleLowerCase();
@@ -242,9 +265,17 @@ export async function queryProducts(query: CatalogQuery): Promise<CatalogResult>
     if (query.caffeine !== undefined && CAFFEINE_FROM_ENUM[row.caffeine] !== query.caffeine) {
       return false;
     }
-    if (query.priceMinCents !== undefined && row.priceCents < query.priceMinCents) return false;
-    if (query.priceMaxCents !== undefined && row.priceCents > query.priceMaxCents) return false;
-    if (query.inStock !== undefined && (row.inventory > 0) !== query.inStock) return false;
+    // Price and availability filters operate on the language-neutral variant
+    // facts (integer cents, per-variant inventory) — never on display strings.
+    if (query.priceMinCents !== undefined && (variant?.priceCents ?? 0) < query.priceMinCents) {
+      return false;
+    }
+    if (query.priceMaxCents !== undefined && (variant?.priceCents ?? 0) > query.priceMaxCents) {
+      return false;
+    }
+    if (query.inStock !== undefined && ((variant?.inventory ?? 0) > 0) !== query.inStock) {
+      return false;
+    }
     return true;
   });
 

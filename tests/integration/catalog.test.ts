@@ -32,13 +32,14 @@ describeDb('catalog discovery query (ADR-0004)', () => {
     await prisma.product.create({
       data: {
         slug: 'demo-unavailable',
-        sku: 'SHY-DEMO-001',
-        priceCents: 50000,
-        inventory: 0,
         origin: 'Demo origin',
         form: 'LOOSE',
         caffeine: 'LOW',
         categoryId: green.id,
+        published: true,
+        variants: {
+          create: [{ sku: 'SHY-DEMO-001', name: 'Standard', priceCents: 50000, inventory: 0 }],
+        },
         localizations: {
           create: [
             {
@@ -69,13 +70,14 @@ describeDb('catalog discovery query (ADR-0004)', () => {
     await prisma.product.create({
       data: {
         slug: 'demo-fallback',
-        sku: 'SHY-DEMO-002',
-        priceCents: 42000,
-        inventory: 5,
         origin: 'Demo origin',
         form: 'COMPRESSED',
         caffeine: 'MEDIUM',
         categoryId: oolong.id,
+        published: true,
+        variants: {
+          create: [{ sku: 'SHY-DEMO-002', name: 'Standard', priceCents: 42000, inventory: 5 }],
+        },
         localizations: {
           create: [
             {
