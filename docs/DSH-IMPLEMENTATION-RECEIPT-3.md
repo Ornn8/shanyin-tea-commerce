@@ -123,3 +123,36 @@
   in `prisma/seed.ts`).
 - The storefront displays the first-created variant only; multi-variant display is out of
   scope for this slice (ADR-0005).
+
+## Review repair round (head `e7f04f0` → new head)
+
+The trusted review at head `e7f04f0` raised two P1 findings; both were confirmed and fixed
+on `agent/issue-3`:
+
+- **[P1] Publishing silently discarded unsaved editor changes** — the editor's Publish
+  action sent only the product id, so it published the previously persisted state and then
+  cleared the unsaved-changes flag. Fix (`src/components/admin/product-editor.tsx`): Publish
+  now persists the current editor payload via the update mutation first, then flips the
+  product to published. A merchant who edits copy/facts and clicks Publish before Save
+  publishes exactly what they see; a rejected edit stops before the publish, and a persisted
+  edit whose state still fails the publication gate keeps the saved state and surfaces the
+  publish reasons. Unpublish (lifecycle-only) no longer clears the dirty flag, so on-screen
+  edits are never silently treated as saved. Covered by a new Playwright journey
+  (desktop + mobile) that edits name/description/price without saving, publishes, and
+  asserts the storefront serves the revised payload.
+- **[P1] Localized storefront copy ignored the advertised English fallback** —
+  `toProductView` picked one localization row and returned its empty description directly
+  (field validation permits empty non-English description/tasting notes; the gate checks
+  English only), so published zh-CN / ja pages could show blank copy where the editor
+  preview showed the English fallback. Fix (`src/lib/products.ts`): the storefront
+  resolves name/description/tasting notes through the same deterministic per-field
+  fallback as the preview (requested locale → English → any row), and search matches that
+  displayed copy (ADR-0004 contract). Covered by a new integration test
+  (`demo-fallback-fields` fixture: published product with empty zh-CN/ja
+  description/tasting notes) asserting `getProductBySlug`/`listProducts` render the
+  English fallback and search finds it by the displayed English text.
+
+Updated verification: `pnpm i18n:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`
+(83 tests), `pnpm build`, and `pnpm e2e` (40 tests across desktop + mobile) all pass on
+Node 24.19.0 / pnpm 11.7.0 / PostgreSQL 17. ADR-0005 and ADR-0004 record the two
+invariants.

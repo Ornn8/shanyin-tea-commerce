@@ -15,6 +15,7 @@
  */
 import { prisma } from '@/lib/prisma';
 import { FALLBACK_LOCALE, type LocaleId } from '@/i18n/registry';
+import { effectiveField, type LocalizedRow } from '@/lib/admin/preview';
 import {
   CAFFEINE_LEVELS,
   CATALOG_PAGE_SIZE,
@@ -89,7 +90,15 @@ function primaryVariant(row: ProductRow) {
 }
 
 export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
-  const loc = pickLocalization(row.localizations, locale);
+  // Field-level English fallback (ADR-0003/0005), the same deterministic
+  // semantics the merchant editor previews: the locale's own value when it is
+  // filled, else English, else any row, else the slug/empty. A locale row may
+  // legally store an empty description or tasting notes (the publication gate
+  // requires English copy only), so the storefront must render the English
+  // fallback instead of returning the blank string — otherwise published
+  // zh-CN / ja pages show blank copy that the merchant preview advertised as
+  // falling back to English.
+  const rows = row.localizations as LocalizedRow[];
   const catLoc = pickLocalization(row.category.localizations, locale);
   const variant = primaryVariant(row);
   return {
@@ -101,9 +110,9 @@ export function toProductView(row: ProductRow, locale: LocaleId): ProductView {
     origin: row.origin,
     form: FORM_FROM_ENUM[row.form] ?? 'loose',
     caffeine: CAFFEINE_FROM_ENUM[row.caffeine] ?? 'medium',
-    name: loc?.name ?? row.slug,
-    description: loc?.description ?? '',
-    tastingNotes: loc?.tastingNotes ?? '',
+    name: effectiveField(rows, locale, 'name', row.slug),
+    description: effectiveField(rows, locale, 'description'),
+    tastingNotes: effectiveField(rows, locale, 'tastingNotes'),
     category: { slug: row.category.slug, name: catLoc?.name ?? row.category.slug },
     createdAt: row.createdAt,
   };
@@ -224,12 +233,12 @@ export interface CatalogResult {
  * Server-backed discovery query: locale-scoped search, fact filters, sort,
  * and stable pagination (ADR-0004).
  *
- * Search matches the SAME copy the page renders for the active locale: the
- * requested locale's localization row, falling back deterministically to
- * English, then to any available row (the ADR-0003 pick order). A product
- * whose effective copy is English is therefore found by its English text in
- * every locale that lacks its own row — never by another locale's rows when
- * its own copy exists.
+ * Search matches the SAME copy the page renders for the active locale: each
+ * name/description field resolves through the deterministic ADR-0003/0005
+ * pick order (requested locale → English → any row), so a locale whose stored
+ * copy is empty but displays the English fallback is found by its English
+ * text in every locale that lacks its own copy — never by another locale's
+ * rows when its own effective copy exists.
  *
  * Price and inventory filters operate on the language-neutral facts
  * (`priceCents`, `inventory`), never on localized display strings.
@@ -255,9 +264,12 @@ export async function queryProducts(query: CatalogQuery): Promise<CatalogResult>
   const matched = rows.filter((row) => {
     const variant = primaryVariant(row);
     if (q) {
-      const loc = pickLocalization(row.localizations, locale);
-      const name = (loc?.name ?? '').toLocaleLowerCase();
-      const description = (loc?.description ?? '').toLocaleLowerCase();
+      // Match the SAME copy the page renders: the effective field-level value
+      // (own locale → English → any row), so a locale whose stored description
+      // is empty but displays the English fallback is found by its English text.
+      const rowsForLocale = row.localizations as LocalizedRow[];
+      const name = effectiveField(rowsForLocale, locale, 'name', '').toLocaleLowerCase();
+      const description = effectiveField(rowsForLocale, locale, 'description', '').toLocaleLowerCase();
       if (!name.includes(q) && !description.includes(q)) return false;
     }
     if (query.category !== undefined && row.category.slug !== query.category) return false;

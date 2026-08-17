@@ -108,14 +108,14 @@ export default async function ProductPage({ params }: ProductPageProps) {
             <h2 className="font-serif text-lg font-semibold text-pine-900">
               {t('product.descriptionTitle')}
             </h2>
-            <p className="text-sm leading-relaxed text-stone-600">{product.description}</p>
+            <p className="text-sm leading-relaxed text-stone-600" data-testid="product-description">{product.description}</p>
           </section>
 
           <section className="flex flex-col gap-3">
             <h2 className="font-serif text-lg font-semibold text-pine-900">
               {t('product.tastingNotesTitle')}
             </h2>
-            <p className="text-sm leading-relaxed text-stone-600">{product.tastingNotes}</p>
+            <p className="text-sm leading-relaxed text-stone-600" data-testid="product-tasting-notes">{product.tastingNotes}</p>
           </section>
         </div>
       </div>

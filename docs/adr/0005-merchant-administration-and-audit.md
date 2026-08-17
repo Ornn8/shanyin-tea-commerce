@@ -69,6 +69,26 @@ storefront never serves a published product that no longer meets the
 requirements — the merchant unpublishes first or restores them. Drafts,
 being already unpublished, may always be saved while incomplete.
 
+**Publishing persists the editor's current payload.** The editor's Publish
+action first saves the working copy via the update mutation, then flips the
+product to published (single merchant, sequential server actions). Clicking
+Publish before Save therefore publishes exactly what the merchant sees —
+unsaved edits are never silently discarded, and the storefront never serves
+stale facts or copy. A rejected edit stops before the publish; a persisted
+edit whose state still fails the gate (for example an incomplete draft that
+cannot be published) is reported with the publish reasons while the saved
+state is kept. Unpublishing only flips lifecycle state; it leaves the
+unsaved-changes indicator intact so on-screen edits are never silently
+treated as saved.
+
+**Storefront copy applies the advertised English fallback.** Field
+validation permits empty description/tasting notes in a non-English locale
+row (the publication gate checks English only), so the storefront renders
+the same effective copy the editor preview advertises — per-field
+requested locale → English → any row — instead of returning the blank
+string. Published zh-CN / ja pages therefore show the English fallback, and
+search matches that displayed copy (ADR-0004).
+
 **Publication gate is concurrency-safe.** `publishProduct` and
 `updateProduct` run as SERIALIZABLE interactive transactions and read the
 product (with variants and localizations) *inside* that transaction, so the

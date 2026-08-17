@@ -41,19 +41,16 @@ test.describe('merchant administration journeys', () => {
     await expect(page.getByTestId('login-form')).toBeVisible();
   });
 
-  test('failed sign-in shows an error; sign-in lands on the product list', async ({ page }) => {
+  test('failed sign-in shows an error and stays on the login page', async ({ page }) => {
+    // One sign-in attempt only: the suite's shared webserver enforces the
+    // better-auth sign-in rate limit (10 attempts / 15 min per IP, ADR-0005),
+    // and every other journey already covers the successful sign-in landing.
     await page.goto('/admin/login');
     await page.getByLabel('Email').fill(ADMIN_EMAIL);
     await page.getByLabel('Password').fill('definitely-wrong-password');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page.getByTestId('login-error')).toBeVisible();
     await expect(page).toHaveURL(/\/admin\/login$/);
-
-    await page.getByLabel('Password').fill(ADMIN_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL(/\/admin\/products$/);
-    await expect(page.getByTestId('admin-product-count')).toBeVisible();
-    await expect(page.getByTestId('admin-email')).toHaveText(ADMIN_EMAIL);
   });
 
   test('create → localize → publish → inventory adjustment → sign-out (full journey)', async ({ page }, testInfo) => {
@@ -211,5 +208,55 @@ test.describe('merchant administration journeys', () => {
 
     await page.goto('/en/products?q=Gate');
     await expect(page.getByTestId('product-card').filter({ hasText: 'E2E Gate Tea' })).toBeVisible();
+  });
+
+  test('publishing without saving first publishes the current editor payload', async ({ page }) => {
+    const slug = `e2e-admin-${test.info().project.name}-payload`;
+    const sku = `E2E-PLD-${test.info().project.name.toUpperCase().slice(0, 4)}`;
+
+    await page.goto('/admin/login');
+    await page.getByLabel('Email').fill(ADMIN_EMAIL);
+    await page.getByLabel('Password').fill(ADMIN_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL(/\/admin\/products$/);
+
+    // Create a publishable draft and save it once.
+    await page.goto('/admin/products/new');
+    await expect(page.getByTestId('product-editor')).toBeVisible();
+    await page.getByTestId('field-slug').fill(slug);
+    await page.getByTestId('field-origin').fill('E2E payload origin, Fujian');
+    await page.getByTestId('field-category').selectOption({ label: 'Green tea' });
+    await page.getByTestId('variant-sku-0').fill(sku);
+    await page.getByTestId('variant-name-0').fill('Standard');
+    await page.getByTestId('variant-price-0').fill('100');
+    await page.getByTestId('variant-inventory-0').fill('1');
+    await page.getByTestId('locale-name-en').fill('E2E Payload Tea');
+    await page.getByTestId('locale-description-en').fill('Original saved description.');
+    await page.getByTestId('locale-name-zh-CN').fill('E2E 载荷演示茶');
+    await page.getByTestId('locale-name-ja').fill('E2Eペイロードデモ茶');
+    await page.getByTestId('save-button').click();
+    await expect(page.getByTestId('editor-title')).toHaveText(slug);
+
+    // Edit localized copy and a shared fact WITHOUT saving, then Publish: the
+    // published state must reflect the on-screen payload, not the stale save.
+    await page.getByTestId('locale-name-en').fill('E2E Payload Tea (revised)');
+    await page.getByTestId('locale-description-en').fill('The revised description was published without a prior save.');
+    await page.getByTestId('variant-price-0').fill('299');
+    await expect(page.getByTestId('unsaved-indicator')).toBeVisible();
+    await page.getByTestId('publish-button').click();
+
+    // The edits were persisted and the product published; the unsaved-changes
+    // indicator is gone because the on-screen payload IS the saved state.
+    await expect(page.getByTestId('editor-published-badge')).toBeVisible();
+    await expect(page.getByTestId('unsaved-indicator')).toBeHidden();
+
+    // The storefront serves the CURRENT payload (revised name/description,
+    // revised price) — the unsaved edits were not silently discarded.
+    await page.goto(`/en/products/${slug}`);
+    await expect(page.getByTestId('product-name')).toHaveText('E2E Payload Tea (revised)');
+    await expect(page.getByTestId('product-description')).toHaveText(
+      'The revised description was published without a prior save.',
+    );
+    await expect(page.locator('.price-ticket').first()).toContainText('299.00');
   });
 });

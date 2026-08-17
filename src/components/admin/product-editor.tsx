@@ -294,22 +294,78 @@ export function ProductEditor({ product, categories }: ProductEditorProps) {
     setPending(true);
     setError(null);
     setNotice(null);
-    const result = await publishProductAction(product.id);
-    handleActionResult(result);
-    router.refresh();
-    setPending(false);
-  }, [product, handleActionResult, router]);
+    try {
+      // Publish exactly what the editor shows, never the previously persisted
+      // state. A merchant may click Publish before Save; the publish action
+      // used to send only the product id, silently discarding the on-screen
+      // edits (the success handler then cleared the unsaved-changes flag).
+      // Persist the current payload first (a draft may be saved while
+      // incomplete — the publish gate then runs on this fresh state), and
+      // only then flip the product to published.
+      const saveResult = await updateProductAction(product.id, buildPayload());
+      if (!saveResult.ok) {
+        if (saveResult.code === 'unauthorized') {
+          router.push('/admin/login');
+        } else {
+          setError({ message: saveResult.error, fieldErrors: saveResult.fieldErrors ?? {} });
+        }
+        return;
+      }
+      const publishResult = await publishProductAction(product.id);
+      if (publishResult.ok) {
+        setDirty(false);
+        setNotice('Published.');
+        setError(null);
+      } else if (publishResult.code === 'unauthorized') {
+        router.push('/admin/login');
+      } else {
+        // The edit was persisted, but the publication gate rejected this
+        // state (e.g. incomplete English copy): keep the editor in sync with
+        // the saved payload (dirty = false) and surface why publishing failed.
+        setDirty(false);
+        setNotice('Changes saved — publishing was rejected.');
+        setError({ message: publishResult.error, fieldErrors: publishResult.fieldErrors ?? {} });
+      }
+    } catch (caught) {
+      if (caught instanceof AdminError) {
+        setError({ message: caught.message, fieldErrors: { ...caught.fieldErrors } });
+      } else {
+        setError({ message: 'Unexpected error while publishing.', fieldErrors: {} });
+      }
+    } finally {
+      setPending(false);
+      router.refresh();
+    }
+  }, [buildPayload, product, router]);
 
   const unpublish = useCallback(async () => {
     if (!product) return;
     setPending(true);
     setError(null);
     setNotice(null);
-    const result = await unpublishProductAction(product.id);
-    handleActionResult(result);
-    router.refresh();
-    setPending(false);
-  }, [product, handleActionResult, router]);
+    try {
+      const result = await unpublishProductAction(product.id);
+      if (result.ok) {
+        // Unpublish only flips the lifecycle state; it does NOT persist the
+        // editor content. Keep the unsaved-changes state untouched so on-
+        // screen edits are never silently treated as saved.
+        setNotice('Unpublished.');
+      } else if (result.code === 'unauthorized') {
+        router.push('/admin/login');
+      } else {
+        setError({ message: result.error, fieldErrors: result.fieldErrors ?? {} });
+      }
+    } catch (caught) {
+      if (caught instanceof AdminError) {
+        setError({ message: caught.message, fieldErrors: { ...caught.fieldErrors } });
+      } else {
+        setError({ message: 'Unexpected error while unpublishing.', fieldErrors: {} });
+      }
+    } finally {
+      setPending(false);
+      router.refresh();
+    }
+  }, [product, router]);
 
   const applyInventory = useCallback(
     async (index: number) => {

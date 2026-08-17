@@ -41,12 +41,15 @@ URLs (defaults like `page=1` and `sort=featured` are omitted).
 | `page`      | positive integer                    | 1-based page                              |
 
 **Locale-scoped search with a documented deterministic fallback.** Search matches the SAME
-copy the page displays for the active locale, using the ADR-0003 pick order: the requested
-locale's `ProductLocalization` row → English → any available row. A product that lacks a row
-for the active locale is found by its effective (fallback) copy; a product that has its own
-row is never matched through another locale's rows. The fallback is exercised by the
-`demo-fallback` fixture in integration tests (a product with no `ja` row, matched by its
-English name from `ja`, not from `zh-CN`, which has its own row).
+copy the page displays for the active locale. Copy resolves **per field** through the
+ADR-0003/0005 pick order — the requested locale's own value → English → any available row —
+so a locale whose stored description/tasting notes are empty (legal: the publication gate
+checks English copy only) but that displays the English fallback is still found by its
+English text. A product that has its own filled copy for the active locale is never matched
+through another locale's rows. The fallback is exercised by the `demo-fallback` fixture
+(a product with no `ja` row, matched by its English name from `ja`, not from `zh-CN`) and
+the `demo-fallback-fields` fixture (zh-CN/ja rows with empty description/tasting notes,
+matched — and displayed — through the English fallback).
 
 **Filters operate on shared facts.** `category` filters on `Category.slug`;
 `form`/`caffeine` on the new language-neutral `Product.form` / `Product.caffeine` enum
