@@ -11,7 +11,12 @@
  *   or locale-specific inventory (integer cents + per-variant inventory +
  *   global SKU uniqueness + publish checks below);
  * - never leave a published product in a state that fails the publishability
- *   gate (updateProduct rejects edits that would break it, ADR-0005).
+ *   gate (updateProduct rejects edits that would break it, ADR-0005);
+ * - evaluate the gate inside the write transaction under SERIALIZABLE
+ *   isolation: publishProduct and updateProduct read the current state on the
+ *   same snapshot they commit against, so a concurrent draft edit can never
+ *   slip between validation and the published flip (a conflicting write
+ *   surfaces the retryable `concurrent-edit` code, ADR-0005).
  */
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@/generated/prisma/client';
@@ -48,6 +53,52 @@ async function loadProductWithRelations(id: string): Promise<ProductWithRelation
   });
   if (!row) throw new AdminError('not-found', 'Product not found.');
   return row;
+}
+
+/** Read a product inside an open transaction (fresh snapshot, ADR-0005). */
+async function loadProductInTx(tx: Tx, id: string): Promise<ProductWithRelations> {
+  const row = await tx.product.findUnique({
+    where: { id },
+    include: {
+      variants: { orderBy: { createdAt: 'asc' } },
+      localizations: true,
+    },
+  });
+  if (!row) throw new AdminError('not-found', 'Product not found.');
+  return row;
+}
+
+/**
+ * Run a commerce mutation as a SERIALIZABLE interactive transaction
+ * (ADR-0005). publishProduct and updateProduct validate the publication gate
+ * on the snapshot the transaction commits against; when a concurrent edit
+ * commits between validation and the write, PostgreSQL's serializable
+ * isolation aborts one of the transactions (P2034) instead of allowing an
+ * invalid published state. The abort surfaces to the merchant as a retryable
+ * `concurrent-edit` domain error.
+ */
+async function runSerializable<T>(operation: (tx: Tx) => Promise<T>): Promise<T> {
+  try {
+    return await prisma.$transaction(operation, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      throw new AdminError(
+        'concurrent-edit',
+        'The product changed while this action was in progress. Review the current state and try again.',
+      );
+    }
+    throw error;
+  }
+}
+
+function isSerializationConflict(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === 'P2034'
+  );
 }
 
 function toAuditRow(
@@ -225,9 +276,12 @@ export async function updateProduct(
   await assertCategoryExists(input.categoryId);
   await assertSlugAvailable(input.slug, productId);
 
-  const beforeRow = await loadProductWithRelations(productId);
+  await runSerializable(async (tx) => {
+    // Read the current state inside the same transaction (ADR-0005): the
+    // audit "before" and the publication gate must observe the snapshot this
+    // update commits against, never a stale pre-transaction read.
+    const beforeRow = await loadProductInTx(tx, productId);
 
-  return prisma.$transaction(async (tx) => {
     await tx.product.update({
       where: { id: productId },
       data: {
@@ -252,8 +306,12 @@ export async function updateProduct(
     // published product without the required English copy or its last variant
     // is rejected here — the transaction rolls back and the storefront never
     // serves a product that no longer satisfies the gate. The merchant
-    // unpublishes first or restores the missing requirements.
-    if (beforeRow.published) {
+    // unpublishes first or restores the missing requirements. The check uses
+    // the in-transaction `afterRow.published` state: a concurrent publish that
+    // committed while this draft edit was in flight is either visible here or
+    // aborts this transaction (serializable isolation → `concurrent-edit`),
+    // so the gate can never be skipped on a stale `published = false`.
+    if (afterRow.published) {
       const publishability = computePublishability(afterRow);
       if (!publishability.ok) {
         throw new AdminError(
@@ -336,15 +394,20 @@ export function computePublishability(
 }
 
 export async function publishProduct(actorEmail: string, productId: string): Promise<void> {
-  const beforeRow = await loadProductWithRelations(productId);
-  const publishability = computePublishability(beforeRow);
-  if (!publishability.ok) {
-    throw new AdminError('not-publishable', publishability.reasons.join(' '), {
-      publish: publishability.reasons.join(' '),
-    });
-  }
+  await runSerializable(async (tx) => {
+    // Read and validate inside the same transaction (ADR-0005): the gate must
+    // evaluate the exact state this publish commits against. If a concurrent
+    // draft edit commits between this read and the `published` flip, the
+    // serializable transaction aborts (P2034 → `concurrent-edit`) instead of
+    // exposing a storefront-visible product that fails the publication gate.
+    const beforeRow = await loadProductInTx(tx, productId);
+    const publishability = computePublishability(beforeRow);
+    if (!publishability.ok) {
+      throw new AdminError('not-publishable', publishability.reasons.join(' '), {
+        publish: publishability.reasons.join(' '),
+      });
+    }
 
-  await prisma.$transaction(async (tx) => {
     const updated = await tx.product.update({
       where: { id: productId },
       data: { published: true, publishedAt: beforeRow.publishedAt ?? new Date() },

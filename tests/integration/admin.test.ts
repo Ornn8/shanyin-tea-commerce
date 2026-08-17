@@ -16,7 +16,13 @@
  * - publication gate on edit: an update that would leave a published product
  *   unpublishable is rejected (rollback, no audit row), a published product
  *   can still be edited while it stays publishable, and drafts may be saved
- *   while incomplete.
+ *   while incomplete;
+ * - publication gate under concurrency: publishProduct reads and validates
+ *   inside its SERIALIZABLE transaction, so a draft edit that commits between
+ *   validation and the `published` flip aborts the publish (P2034 →
+ *   `concurrent-edit`) instead of exposing an invalid storefront product;
+ *   racing publish/update rounds never commit an unpublishable published
+ *   state.
  *
  * Test files run serially (`fileParallelism: false`) and share one database;
  * every fixture is cleaned up in `afterAll`.
@@ -25,6 +31,7 @@ import 'dotenv/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hashPassword } from 'better-auth/crypto';
 import { prisma } from '@/lib/prisma';
+import { Prisma } from '@/generated/prisma/client';
 import { auth, SIGN_IN_RATE_LIMIT } from '@/lib/auth';
 import { ADMIN_EMAIL, getSessionForHeaders, requireAdminForHeaders } from '@/lib/admin/authz';
 import {
@@ -504,6 +511,121 @@ describeDb('merchant administration (ADR-0005)', () => {
     // Inventory stays on the variant — localization rows never carry stock.
     for (const loc of row.localizations) {
       expect(Object.keys(loc)).not.toContain('inventory');
+    }
+  });
+
+  it('publish validates inside the write transaction: a draft edit landing between validation and the flip cannot sneak the gate', async () => {
+    const slug = 'it-admin-publish-race';
+    const { id } = await createProduct(ADMIN_EMAIL, basePayload(slug, 'IT-ADMIN-070'));
+    createdProductIds.push(id);
+
+    // Start the publish's transaction manually — the exact steps publishProduct
+    // now performs inside its SERIALIZABLE transaction — and pause it right
+    // after the gate read/validation, before the `published` flip.
+    let readDone!: () => void;
+    let resumePublish!: () => void;
+    const readGate = new Promise<void>((resolve) => (readDone = resolve));
+    const resumeGate = new Promise<void>((resolve) => (resumePublish = resolve));
+
+    const publishAttempt = prisma
+      .$transaction(
+        async (tx) => {
+          const row = (await tx.product.findUniqueOrThrow({
+            where: { id },
+            include: { variants: true, localizations: true },
+          })) as {
+            publishedAt: Date | null;
+            variants: Array<{
+              id: string;
+              sku: string;
+              name: string;
+              priceCents: number;
+              inventory: number;
+            }>;
+            localizations: Array<{
+              locale: string;
+              name: string;
+              description: string;
+              tastingNotes: string;
+            }>;
+          };
+          const publishability = computePublishability(row);
+          expect(publishability.ok).toBe(true);
+          readDone();
+          await resumeGate;
+          await tx.product.update({
+            where: { id },
+            data: { published: true, publishedAt: row.publishedAt ?? new Date() },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      )
+      .then(
+        () => 'committed',
+        (error: unknown) => (error as { code?: string }).code ?? 'failed',
+      );
+
+    await readGate;
+    // The concurrent draft edit commits while the publish is mid-transaction:
+    // clearing the English description is legal for a draft, but the publish
+    // must not be able to commit on top of it (this is the interleaving the
+    // sequential exact-head CI never exercised).
+    const broken = basePayload(slug, 'IT-ADMIN-070');
+    broken.localizations.en.description = '';
+    await updateProduct(ADMIN_EMAIL, id, broken);
+    resumePublish();
+
+    // SERIALIZABLE aborts the stale-era publish (P2034 — the service maps it
+    // to the retryable `concurrent-edit` domain error); the storefront never
+    // gets a published product that fails the gate.
+    expect(await publishAttempt).toBe('P2034');
+    const row = await prisma.product.findUniqueOrThrow({
+      where: { id },
+      include: { localizations: true },
+    });
+    expect(row.published).toBe(false);
+    expect(row.localizations.find((loc) => loc.locale === 'en')?.description).toBe('');
+    expect((await listProducts('en')).some((product) => product.slug === slug)).toBe(false);
+  });
+
+  it('a publish racing a gate-breaking draft edit never commits an invalid published state (all interleavings)', async () => {
+    // Fire publish and a gate-breaking draft edit concurrently and assert the
+    // invariant after each round: the storefront must never end up with a
+    // published product that fails the publication gate, no round may see both
+    // mutations succeed, and any failure must surface as a domain code.
+    for (let round = 0; round < 5; round++) {
+      const slug = `it-admin-race-${round}`;
+      const sku = `IT-ADMIN-RC-${round}`;
+      const { id } = await createProduct(ADMIN_EMAIL, basePayload(slug, sku));
+      createdProductIds.push(id);
+
+      const broken = basePayload(slug, sku);
+      broken.localizations.en.description = '';
+
+      const [publishOutcome, updateOutcome] = await Promise.allSettled([
+        publishProduct(ADMIN_EMAIL, id),
+        updateProduct(ADMIN_EMAIL, id, broken),
+      ]);
+
+      const row = await prisma.product.findUniqueOrThrow({
+        where: { id },
+        include: { variants: true, localizations: true },
+      });
+      if (row.published) {
+        expect(computePublishability(row).ok).toBe(true);
+      }
+
+      const codes = [
+        publishOutcome.status === 'fulfilled' ? 'ok' : (publishOutcome.reason as { code: string }).code,
+        updateOutcome.status === 'fulfilled' ? 'ok' : (updateOutcome.reason as { code: string }).code,
+      ];
+      // At most one of the two can commit: a committed publish forces the
+      // edit into not-publishable/concurrent-edit, and a committed broken
+      // edit makes the publish fail on its fresh in-transaction read.
+      expect(codes).not.toEqual(['ok', 'ok']);
+      for (const code of codes) {
+        expect(['ok', 'not-publishable', 'concurrent-edit']).toContain(code);
+      }
     }
   });
 

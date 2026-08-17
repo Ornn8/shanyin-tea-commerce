@@ -45,6 +45,16 @@
   would leave a currently published product unpublishable — for example clearing the
   English description, which field validation permits — so the storefront never serves a
   published product that fails the requirement (integration + e2e covered).
+- **The publication gate is concurrency-safe**: `publishProduct` and `updateProduct` run as
+  SERIALIZABLE interactive transactions and read the product (with variants and
+  localizations) inside that transaction, so the gate evaluates the exact state the write
+  commits against. A concurrent draft edit can no longer slip between the publish's
+  validation and the `published` flip: overlapping transactions abort with a PostgreSQL
+  serialization failure (P2034), surfaced as a retryable `concurrent-edit` domain error,
+  and `updateProduct`'s gate uses the fresh in-transaction `published` state — the
+  storefront never serves a published product that fails the gate under any interleaving
+  (deterministic paused-transaction regression test + racing publish/update rounds,
+  integration-covered).
 - **Audit trail**: every mutation (`product.create/update/publish/unpublish`,
   `variant.inventory`) writes an `AuditLog` row in the same transaction — actor, timestamp,
   entity, before/after JSON summary — containing product data only, never secrets.
@@ -62,15 +72,18 @@
   `published = true`, `publishedAt = createdAt`) — verified against PostgreSQL 17.
 - `pnpm i18n:check` — 73 English source keys, 3 registered locales.
 - `pnpm lint`, `pnpm typecheck` (strict), `pnpm build` (production build, all 13 routes).
-- `pnpm test` — 80 tests (9 files), including the new admin suite: guards (no cookie /
+- `pnpm test` — 82 tests (9 files), including the new admin suite: guards (no cookie /
   forged cookie / valid session / non-allowlisted user), disabled sign-up, CSRF 403 +
   same-origin positive control, sign-in rate-limit 429, all mutation paths with audit
   assertions (before/after, coverage, no secrets), the invalid-input matrix (duplicate
   SKUs across and within payloads, negative stock, float prices, unknown locales, duplicate
-  slugs, empty variants, unpublishable products), and the published-edit gate (an update
+  slugs, empty variants, unpublishable products), the published-edit gate (an update
   that would break a published product's publishability is rejected with rollback and no
-  audit row; publishable edits and incomplete drafts still save); unit tests for yuan→cents
-  parsing, slug/SKU/inventory validation, and fallback/completeness.
+  audit row; publishable edits and incomplete drafts still save), and the publication-gate
+  concurrency tests (a draft edit landing between the publish's validation and the flip
+  aborts the publish via SERIALIZABLE isolation; racing publish/update rounds never commit
+  an invalid published state and failures surface only as domain codes); unit tests for
+  yuan→cents parsing, slug/SKU/inventory validation, and fallback/completeness.
 - `pnpm e2e` — 38 Playwright tests across desktop (1440×900) and mobile (390×844): the new
   admin journeys (redirect, failed/successful sign-in, create → localize → publish →
   storefront visibility → inventory adjustment → sign-out, unpublish hiding, editing a

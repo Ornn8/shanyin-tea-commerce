@@ -69,6 +69,22 @@ storefront never serves a published product that no longer meets the
 requirements — the merchant unpublishes first or restores them. Drafts,
 being already unpublished, may always be saved while incomplete.
 
+**Publication gate is concurrency-safe.** `publishProduct` and
+`updateProduct` run as SERIALIZABLE interactive transactions and read the
+product (with variants and localizations) *inside* that transaction, so the
+gate evaluates the exact state the write commits against. A concurrent
+draft edit can no longer commit between the publish's validation and the
+`published` flip: PostgreSQL's serializable isolation aborts one of the two
+transactions (P2034) whenever they overlap on the same rows, and the service
+surfaces that as a retryable `concurrent-edit` domain error (UI: review and
+try again). `updateProduct` likewise re-reads the product inside its
+transaction, so a draft edit can never skip the gate on a stale
+`published = false` snapshot after a publish committed. The invariant holds
+under every interleaving: either both operations serialize cleanly (the
+publish validates the committed edit, or the update sees `published` and
+enforces the gate) or one aborts — the storefront never serves a published
+product that fails the publication requirements.
+
 **Audit trail.** Every commerce mutation (`product.create`, `product.update`,
 `product.publish`, `product.unpublish`, `variant.inventory`) writes an
 `AuditLog` row in the same transaction: actor (admin email), timestamp, entity
@@ -97,3 +113,7 @@ The admin header labels, sign-in link, and login page copy are plain English
 - Storefront fixtures and queries were migrated to variants; integration
   tests cover the migration invariants (shared facts, one variant per seeded
   product, published-only storefront views).
+- SERIALIZABLE isolation on `publishProduct`/`updateProduct` trades a
+  retryable `concurrent-edit` error for atomicity of the publication gate
+  under concurrent administration; single-merchant traffic makes conflicts
+  rare, and the merchant simply reviews and retries.
