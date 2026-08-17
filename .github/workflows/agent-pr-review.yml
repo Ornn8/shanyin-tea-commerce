@@ -26,7 +26,7 @@ jobs:
           || !contains(github.event.pull_request.labels.*.name, 'automation/repairing'))
         && (github.event.action != 'labeled' || github.event.label.name == 'automation/review-ready')
         && (github.event.action != 'edited' || github.event.changes.base.ref.from != null))
-    uses: Ornn8/dsh-agent-automation/.github/workflows/agent-review.yml@9ce345b73b1dca69c4d12cebcc0501b7f2119301
+    uses: Ornn8/dsh-agent-automation/.github/workflows/agent-review.yml@69cb3077fd000c3bfbd8b8e3214616cbf92f3054
     with:
       pull_request_number: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pull_request_number || github.event.pull_request.number }}
       base_sha: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.base_sha || github.event.pull_request.base.sha }}
