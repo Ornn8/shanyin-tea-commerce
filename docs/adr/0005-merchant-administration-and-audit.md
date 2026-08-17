@@ -61,7 +61,13 @@ editor shows completeness per locale, live English-fallback previews, and
 the coverage table; the publish audit entry snapshots the coverage.
 Publishing can never create duplicate SKUs (normalization + pre-check +
 unique index), negative stock or float prices (integer-only validation), or
-per-locale inventory (schema).
+per-locale inventory (schema). The gate is enforced on edits too: an update
+to a published product that would leave it unpublishable (for example,
+clearing the English description, which field validation permits) is
+rejected in the same transaction before any audit row is written, so the
+storefront never serves a published product that no longer meets the
+requirements — the merchant unpublishes first or restores them. Drafts,
+being already unpublished, may always be saved while incomplete.
 
 **Audit trail.** Every commerce mutation (`product.create`, `product.update`,
 `product.publish`, `product.unpublish`, `variant.inventory`) writes an

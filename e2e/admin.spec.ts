@@ -171,4 +171,45 @@ test.describe('merchant administration journeys', () => {
     await page.goto('/en/products?q=E2E');
     await expect(page.getByTestId('product-card').filter({ hasText: 'E2E Admin Tea' })).toHaveCount(0);
   });
+
+  test('editing a published product into a non-publishable state is rejected and the storefront keeps serving it', async ({ page }) => {
+    const slug = `e2e-admin-${test.info().project.name}-gate`;
+    const sku = `E2E-GATE-${test.info().project.name.toUpperCase().slice(0, 4)}`;
+
+    await page.goto('/admin/login');
+    await page.getByLabel('Email').fill(ADMIN_EMAIL);
+    await page.getByLabel('Password').fill(ADMIN_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL(/\/admin\/products$/);
+
+    // Create a minimal product and publish it. The editor always submits a
+    // row per locale, whose title is required, so every locale gets a name.
+    await page.goto('/admin/products/new');
+    await expect(page.getByTestId('product-editor')).toBeVisible();
+    await page.getByTestId('field-slug').fill(slug);
+    await page.getByTestId('field-origin').fill('E2E gate origin, Fujian');
+    await page.getByTestId('field-category').selectOption({ label: 'Green tea' });
+    await page.getByTestId('variant-sku-0').fill(sku);
+    await page.getByTestId('variant-name-0').fill('Standard');
+    await page.getByTestId('variant-price-0').fill('100');
+    await page.getByTestId('variant-inventory-0').fill('1');
+    await page.getByTestId('locale-name-en').fill('E2E Gate Tea');
+    await page.getByTestId('locale-description-en').fill('A publishable English description.');
+    await page.getByTestId('locale-name-zh-CN').fill('E2E 门禁演示茶');
+    await page.getByTestId('locale-name-ja').fill('E2Eゲートデモ茶');
+    await page.getByTestId('save-button').click();
+    await expect(page.getByTestId('editor-title')).toHaveText(slug);
+    await page.getByTestId('publish-button').click();
+    await expect(page.getByTestId('editor-published-badge')).toBeVisible();
+
+    // Clear the English description: the update must be rejected, the product
+    // must stay published, and the storefront must keep serving it.
+    await page.getByTestId('locale-description-en').fill('');
+    await page.getByTestId('save-button').click();
+    await expect(page.getByTestId('editor-error')).toContainText('published');
+    await expect(page.getByTestId('editor-published-badge')).toBeVisible();
+
+    await page.goto('/en/products?q=Gate');
+    await expect(page.getByTestId('product-card').filter({ hasText: 'E2E Gate Tea' })).toBeVisible();
+  });
 });

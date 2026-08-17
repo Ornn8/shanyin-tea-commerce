@@ -40,7 +40,11 @@
 - **Publishing** requires a variant and English title/description; it computes and exposes
   per-locale translation coverage (also snapshotted into the audit entry) and can never
   produce duplicate SKUs, negative stock, floating-point prices, or locale-specific
-  inventory. Unpublished products are invisible to the storefront.
+  inventory. Unpublished products are invisible to the storefront. The gate is revalidated
+  on edits: `updateProduct` rejects (same transaction, `not-publishable`) any update that
+  would leave a currently published product unpublishable — for example clearing the
+  English description, which field validation permits — so the storefront never serves a
+  published product that fails the requirement (integration + e2e covered).
 - **Audit trail**: every mutation (`product.create/update/publish/unpublish`,
   `variant.inventory`) writes an `AuditLog` row in the same transaction — actor, timestamp,
   entity, before/after JSON summary — containing product data only, never secrets.
@@ -58,17 +62,21 @@
   `published = true`, `publishedAt = createdAt`) — verified against PostgreSQL 17.
 - `pnpm i18n:check` — 73 English source keys, 3 registered locales.
 - `pnpm lint`, `pnpm typecheck` (strict), `pnpm build` (production build, all 13 routes).
-- `pnpm test` — 77 tests (9 files), including the new admin suite: guards (no cookie /
+- `pnpm test` — 80 tests (9 files), including the new admin suite: guards (no cookie /
   forged cookie / valid session / non-allowlisted user), disabled sign-up, CSRF 403 +
   same-origin positive control, sign-in rate-limit 429, all mutation paths with audit
-  assertions (before/after, coverage, no secrets), and the invalid-input matrix (duplicate
+  assertions (before/after, coverage, no secrets), the invalid-input matrix (duplicate
   SKUs across and within payloads, negative stock, float prices, unknown locales, duplicate
-  slugs, empty variants, unpublishable products); unit tests for yuan→cents parsing,
-  slug/SKU/inventory validation, and fallback/completeness.
-- `pnpm e2e` — 36 Playwright tests across desktop (1440×900) and mobile (390×844): the new
+  slugs, empty variants, unpublishable products), and the published-edit gate (an update
+  that would break a published product's publishability is rejected with rollback and no
+  audit row; publishable edits and incomplete drafts still save); unit tests for yuan→cents
+  parsing, slug/SKU/inventory validation, and fallback/completeness.
+- `pnpm e2e` — 38 Playwright tests across desktop (1440×900) and mobile (390×844): the new
   admin journeys (redirect, failed/successful sign-in, create → localize → publish →
-  storefront visibility → inventory adjustment → sign-out, unpublish hiding, no horizontal
-  overflow, screenshots) plus the existing storefront smoke and discovery suites unchanged.
+  storefront visibility → inventory adjustment → sign-out, unpublish hiding, editing a
+  published product into a non-publishable state is rejected while the storefront keeps
+  serving it, no horizontal overflow, screenshots) plus the existing storefront smoke and
+  discovery suites unchanged.
 
 ## Acceptance mapping
 
@@ -80,8 +88,9 @@
 - Editor shows per-locale completeness, fallback previews, validation errors, unsaved
   changes, shared-vs-localized boundaries: done (unit + e2e coverage).
 - Publishing cannot create duplicate SKUs, negative stock, floating-point prices, or
-  locale-specific inventory: done (normalization + pre-check + unique index + integer-only
-  validation + schema; integration-tested).
+  locale-specific inventory; a published product can never be edited into a state that
+  fails the publication requirements: done (normalization + pre-check + unique index +
+  integer-only validation + schema + revalidation on `updateProduct`; integration-tested).
 - Every mutation records actor, timestamp, entity, before/after summary without secrets:
   done (`AuditLog` in-transaction; no-secrets test).
 - CSRF/session protections, authorization checks, rate limits, invalid-input cases

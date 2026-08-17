@@ -12,7 +12,11 @@
  * - mutations: create/update/publish/unpublish/inventory with audit rows for
  *   every mutation (actor, timestamp, entity, before/after, no secrets);
  * - invalid input: duplicate SKUs, negative stock, floating-point prices,
- *   unknown locales, duplicate slugs, missing publish requirements.
+ *   unknown locales, duplicate slugs, missing publish requirements;
+ * - publication gate on edit: an update that would leave a published product
+ *   unpublishable is rejected (rollback, no audit row), a published product
+ *   can still be edited while it stays publishable, and drafts may be saved
+ *   while incomplete.
  *
  * Test files run serially (`fileParallelism: false`) and share one database;
  * every fixture is cleaned up in `afterAll`.
@@ -346,6 +350,80 @@ describeDb('merchant administration (ADR-0005)', () => {
     expect(after.origin).toBe('Updated demo origin');
     expect(before.variants.find((variant) => variant.sku === 'IT-ADMIN-010')?.priceCents).toBe(10000);
     expect(after.variants.find((variant) => variant.sku === 'IT-ADMIN-010')?.priceCents).toBe(12500);
+  });
+
+  it('updateProduct rejects an edit that would break publishability of a published product (storefront gate holds)', async () => {
+    const slug = 'it-admin-published-gate';
+    const { id } = await createProduct(ADMIN_EMAIL, basePayload(slug, 'IT-ADMIN-060'));
+    createdProductIds.push(id);
+    await publishProduct(ADMIN_EMAIL, id);
+
+    // Clearing the English description is allowed by field validation, but it
+    // must not leave a published product failing the required English gate.
+    const broken = basePayload(slug, 'IT-ADMIN-060');
+    broken.localizations.en.description = '';
+    await expect(updateProduct(ADMIN_EMAIL, id, broken)).rejects.toMatchObject({
+      code: 'not-publishable',
+    });
+
+    // The transaction rolled back: nothing changed, no audit row, and the
+    // product is still published and storefront-visible with the old copy.
+    const row = await prisma.product.findUniqueOrThrow({
+      where: { id },
+      include: { localizations: true },
+    });
+    expect(row.published).toBe(true);
+    expect(row.localizations.find((loc) => loc.locale === 'en')?.description).toBe(
+      'Demo product created by the admin integration suite.',
+    );
+    const updateAudits = await prisma.auditLog.count({
+      where: { entityId: id, action: 'product.update' },
+    });
+    expect(updateAudits).toBe(0);
+    expect((await listProducts('en')).some((product) => product.slug === slug)).toBe(true);
+  });
+
+  it('updateProduct allows editing a published product when the new state stays publishable', async () => {
+    const slug = 'it-admin-published-keep';
+    const { id } = await createProduct(ADMIN_EMAIL, basePayload(slug, 'IT-ADMIN-061'));
+    createdProductIds.push(id);
+    await publishProduct(ADMIN_EMAIL, id);
+
+    const edit = basePayload(slug, 'IT-ADMIN-061');
+    edit.localizations.en.description = 'A refreshed description that still satisfies the gate.';
+    await updateProduct(ADMIN_EMAIL, id, edit);
+
+    const row = await prisma.product.findUniqueOrThrow({
+      where: { id },
+      include: { localizations: true },
+    });
+    expect(row.published).toBe(true);
+    expect(row.localizations.find((loc) => loc.locale === 'en')?.description).toBe(
+      'A refreshed description that still satisfies the gate.',
+    );
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { entityId: id, action: 'product.update' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect((audit.after as { published: boolean }).published).toBe(true);
+    expect((audit.before as { published: boolean }).published).toBe(true);
+  });
+
+  it('updateProduct lets a draft be saved even when it is not publishable yet', async () => {
+    const slug = 'it-admin-draft-incomplete';
+    const { id } = await createProduct(ADMIN_EMAIL, basePayload(slug, 'IT-ADMIN-062'));
+    createdProductIds.push(id);
+
+    // Drafts may be incomplete (the publish action enforces the gate).
+    const incomplete = basePayload(slug, 'IT-ADMIN-062');
+    incomplete.localizations = {
+      en: { name: 'Draft only', description: '', tastingNotes: '' },
+    } as unknown as typeof incomplete.localizations;
+    await updateProduct(ADMIN_EMAIL, id, incomplete);
+
+    const row = await prisma.product.findUniqueOrThrow({ where: { id } });
+    expect(row.published).toBe(false);
+    expect((await listProducts('en')).some((product) => product.slug === slug)).toBe(false);
   });
 
   it('setVariantInventory adjusts stock with an audited variant.inventory action', async () => {

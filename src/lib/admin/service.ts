@@ -9,7 +9,9 @@
  *   entity, before/after JSON summary — no secrets);
  * - can never produce duplicate SKUs, negative stock, floating-point prices,
  *   or locale-specific inventory (integer cents + per-variant inventory +
- *   global SKU uniqueness + publish checks below).
+ *   global SKU uniqueness + publish checks below);
+ * - never leave a published product in a state that fails the publishability
+ *   gate (updateProduct rejects edits that would break it, ADR-0005).
  */
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@/generated/prisma/client';
@@ -243,6 +245,24 @@ export async function updateProduct(
       where: { id: productId },
       include: { variants: true, localizations: true },
     })) as ProductWithRelations;
+
+    // Publication invariant (ADR-0005): a published product must keep meeting
+    // the publishability gate. Field validation allows an empty description
+    // (English fallback for other locales), so an edit that would leave a
+    // published product without the required English copy or its last variant
+    // is rejected here — the transaction rolls back and the storefront never
+    // serves a product that no longer satisfies the gate. The merchant
+    // unpublishes first or restores the missing requirements.
+    if (beforeRow.published) {
+      const publishability = computePublishability(afterRow);
+      if (!publishability.ok) {
+        throw new AdminError(
+          'not-publishable',
+          `Cannot save: this product is published and must keep meeting the publication requirements. ${publishability.reasons.join(' ')}`,
+          { publish: publishability.reasons.join(' ') },
+        );
+      }
+    }
 
     await writeAuditInTx(tx, {
       action: 'product.update',
