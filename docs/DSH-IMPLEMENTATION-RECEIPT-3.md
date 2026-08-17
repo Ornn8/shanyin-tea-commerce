@@ -26,8 +26,11 @@
 - **One workflow over shared facts, variants, prices, inventory, publication state, and
   localized content**: `Product` keeps shared facts + `published`/`publishedAt`; new
   `ProductVariant` rows own globally unique SKUs, integer-minor-unit CNY prices, and
-  non-negative inventory (shared across locales by construction — the legacy columns were
-  migrated with a backfill). `ProductLocalization` gained brewing guidance, SEO title/
+  non-negative inventory (shared across locales by construction — the legacy
+  columns were migrated with a variant backfill, and existing products are
+  backfilled `published = true` with `publishedAt = createdAt` so the new
+  published-only storefront queries never hide pre-migration products).
+  `ProductLocalization` gained brewing guidance, SEO title/
   description, and media alt text.
 - **Editor UX**: per-locale completeness (n/7), live English-fallback previews (requested
   locale → English → any row), per-field server validation errors, unsaved-changes
@@ -50,6 +53,9 @@
 - Clean checks on Node.js 24.19.0 LTS with pnpm 11.7.0, PostgreSQL 17 via Docker Compose.
 - Migration `20260817100000_merchant_admin_variants_audit` applied; seed creates 3
   categories, 6 products (6 variants, 18 localizations) and 1 merchant administrator.
+- Upgrade-path check: a database populated at the pre-migration schema keeps every
+  existing product storefront-visible after the migration (backfilled
+  `published = true`, `publishedAt = createdAt`) — verified against PostgreSQL 17.
 - `pnpm i18n:check` — 73 English source keys, 3 registered locales.
 - `pnpm lint`, `pnpm typecheck` (strict), `pnpm build` (production build, all 13 routes).
 - `pnpm test` — 77 tests (9 files), including the new admin suite: guards (no cookie /

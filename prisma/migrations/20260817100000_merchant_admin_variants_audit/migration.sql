@@ -68,6 +68,15 @@ CREATE TABLE "Verification" (
 ALTER TABLE "Product" ADD COLUMN "published" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Product" ADD COLUMN "publishedAt" TIMESTAMP(3);
 
+-- Backfill: before this migration every product was storefront-visible (there
+-- was no publication concept), so legacy products keep that status. Mark them
+-- published with publishedAt = createdAt ("live since creation") so the new
+-- published-only storefront queries hide nothing that was visible before.
+-- New products created by the merchant start unpublished via the schema
+-- default; the WHERE guard keeps the statement a no-op on a partial retry.
+UPDATE "Product" SET "published" = true, "publishedAt" = "createdAt"
+WHERE "published" = false;
+
 -- CreateTable: language-neutral variants.
 CREATE TABLE "ProductVariant" (
     "id" TEXT NOT NULL,

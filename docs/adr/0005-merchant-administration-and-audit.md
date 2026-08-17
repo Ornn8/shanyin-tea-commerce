@@ -45,8 +45,12 @@ origin, form, caffeine, category) and a lifecycle state (`published`,
 `publishedAt`); sellable units live in `ProductVariant` (globally unique
 SKU, shared name, `priceCents` as integer minor units of CNY, non-negative
 `inventory`). The legacy single-row SKU/price/inventory columns were dropped
-(migration backfills one default variant per existing product). Storefront
-views read the first-created variant; all storefront queries filter
+(migration backfills one default variant per existing product). Because every
+pre-migration product was storefront-visible, the migration also backfills
+`published = true` with `publishedAt = createdAt` for the existing rows — the
+new published-only storefront queries never hide products that were visible
+before the migration; only products created afterwards start unpublished.
+Storefront views read the first-created variant; all storefront queries filter
 `published: true`. Inventory is per variant and shared across locales by
 construction — localization rows carry no stock fields.
 
