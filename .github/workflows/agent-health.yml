@@ -62,7 +62,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.replica_routing.outputs.matrix) }}
     name: ${{ matrix.role }} / ${{ matrix.label }}
-    uses: Ornn8/dsh-agent-automation/.github/workflows/pipeline-health.yml@69cb3077fd000c3bfbd8b8e3214616cbf92f3054
+    uses: Ornn8/dsh-agent-automation/.github/workflows/pipeline-health.yml@e0a382935476711188f9e64fc0b8c785e02df069
     with:
       role: ${{ matrix.role }}
       replica_id: ${{ matrix.label }}
@@ -71,6 +71,6 @@ jobs:
   hosted-watchdog:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: hosted queue watchdog
-    uses: Ornn8/dsh-agent-automation/.github/workflows/runner-watchdog.yml@69cb3077fd000c3bfbd8b8e3214616cbf92f3054
+    uses: Ornn8/dsh-agent-automation/.github/workflows/runner-watchdog.yml@e0a382935476711188f9e64fc0b8c785e02df069
     with:
       controller_repository: Ornn8/dsh-agent-automation
