@@ -24,10 +24,11 @@ seeded tea keeps its canonical URL `/…/products/:slug` under the active locale
 segment. The route is force-dynamic and resolves the product by its
 language-neutral `slug`; the page root carries `data-product-id` with the
 product's CUID (identical across all three locales). `generateMetadata`
-derives the request origin from headers (`src/lib/site-url.ts`) and emits
-`alternates.canonical` plus `alternates.languages` for `zh-CN`/`en`/`ja` with
-`x-default` pointing at the English fallback locale. Title/description prefer
-the seeded `seoTitle`/`seoDescription` and fall back to the localized name and
+derives the request origin from the trusted configured public origin
+(`PUBLIC_SITE_URL`, `src/lib/site-url.ts`) and emits `alternates.canonical`
+plus `alternates.languages` for `zh-CN`/`en`/`ja` with `x-default` pointing at
+the English fallback locale. Title/description prefer the seeded
+`seoTitle`/`seoDescription` and fall back to the localized name and
 description — the ADR-0003/0005 pick order, never blank.
 
 **Variant selection is pure client state.** The purchase panel
@@ -66,6 +67,21 @@ different variant, the client patches the `offers` block in place
 (`src/lib/product-schema.ts`) so the structured data always matches the
 visible price and availability. The builders are pure and unit-tested; the
 patch is exercised by e2e (initial render and after a switch).
+
+**Script-safe serialization and a trusted origin (security hardening).** The
+JSON string is embedded verbatim with `dangerouslySetInnerHTML` in a
+`<script type="application/ld+json">` element, so `serializeProductSchema`
+escapes every HTML-sensitive character (`<`, `>`, `&`, U+2028, U+2029) to
+its JSON `\uXXXX` form before embedding — `JSON.stringify` alone would let a
+merchant-editable name or description containing `</script><script>…`
+terminate the data element and execute script on the storefront. The escapes
+keep the document valid JSON, round-trip exactly through `JSON.parse`
+(regression-tested), and make the schema independent of which field carries
+the payload. Because the schema (and the canonical/hreflang links) contain a
+canonical URL, the public origin is derived from trusted configuration
+(`PUBLIC_SITE_URL`) when set; without it only local-development hosts are
+accepted from request headers, so an unconfigured instance cannot be poisoned
+into emitting attacker-chosen origins.
 
 **Localized completeness with English fallback, explicitly tested.** Product
 facts (origin, form, caffeine, SKU) use shared values with i18n key labels;

@@ -102,6 +102,28 @@
 - This receipt identifies `opencode-go/deepseek-v4-flash` with `max` reasoning, no fallback:
   done.
 
+## Security hardening (agent review repair)
+
+The automatic review of PR #25 (BLOCK) identified that the JSON-LD product
+schema was embedded in a `<script type="application/ld+json">` element via
+`dangerouslySetInnerHTML` with only `JSON.stringify` output, whose legal-JSON
+characters `<`/`>`/`&` and U+2028/U+2029 remain raw — a merchant-editable name
+or description containing `</script><script>…` could terminate the data
+element and execute script for storefront visitors. Two root-cause fixes were
+applied on the same branch:
+
+- `src/lib/product-schema.ts` — `serializeProductSchema` now escapes every
+  HTML-sensitive character to its JSON `\uXXXX` form before embedding. The
+  document stays valid JSON, round-trips exactly through `JSON.parse`, and
+  can never terminate the script element regardless of which field carries
+  the payload (regression unit tests added).
+- `src/lib/site-url.ts` — the public origin used for canonical/hreflang/
+  JSON-LD URLs now comes from the trusted `PUBLIC_SITE_URL` configuration
+  when set; without it, only local-development hosts are honored from request
+  headers, so an unconfigured instance cannot be poisoned into emitting
+  attacker-chosen origins (host-header poisoning guard, unit-tested;
+  documented in `.env.example` and SETUP.md).
+
 ## Caveats (recorded, not blocking)
 
 - The JSON-LD patch mutates the rendered script element in place; it is a guarded no-op when

@@ -14,6 +14,19 @@
  * availability (Acceptance: "Structured data contains only verified seeded
  * facts and matches visible price and availability"). The pure builders are
  * unit-tested; the DOM patch is exercised by the e2e suite.
+ *
+ * Serialization safety: the JSON string is embedded verbatim in an HTML
+ * `<script type="application/ld+json">` element (the page uses
+ * `dangerouslySetInnerHTML`), so characters that are legal in JSON but unsafe
+ * inside a script element — `<`/`>`/`&` and the U+2028/U+2029 line
+ * separators — are escaped to their `\uXXXX` forms before embedding
+ * (`serializeProductSchema`). `JSON.stringify` alone does NOT do this: a
+ * merchant-editable name or description containing `</script><script>…`
+ * would otherwise terminate the JSON-LD element and execute script in
+ * visitors' browsers. The escapes keep the document valid JSON and round-trip
+ * through `JSON.parse` unchanged (regression-tested). The client patch writes
+ * through `textContent`, which is never re-parsed as HTML, so it needs no
+ * escaping.
  */
 
 export const PRODUCT_SCHEMA_SCRIPT_ID = 'product-jsonld';
@@ -76,9 +89,37 @@ export function buildProductSchema(input: ProductSchemaInput): Record<string, un
   return schema;
 }
 
+/**
+ * Characters that are valid inside a JSON document but unsafe inside an HTML
+ * `<script>` element: an unescaped `<` can terminate the element at the next
+ * `</script` sequence, `&` starts HTML character references in the parser,
+ * and U+2028/U+2029 (JavaScript line/paragraph separators) historically broke
+ * string literals in JS engines that execute script content. Every one is
+ * emitted as a JSON `\uXXXX` escape so the document stays valid JSON and
+ * parses back to the original characters.
+ */
+const SCRIPT_UNSAFE_RE = /[<>&\u2028\u2029]/g;
+
+function escapeScriptUnsafe(match: string): string {
+  switch (match) {
+    case '<':
+      return '\\u003c';
+    case '>':
+      return '\\u003e';
+    case '&':
+      return '\\u0026';
+    case '\u2028':
+      return '\\u2028';
+    case '\u2029':
+      return '\\u2029';
+    default:
+      return match;
+  }
+}
+
 /** JSON string for the page's `<script type="application/ld+json">` element. */
 export function serializeProductSchema(input: ProductSchemaInput): string {
-  return JSON.stringify(buildProductSchema(input));
+  return JSON.stringify(buildProductSchema(input)).replace(SCRIPT_UNSAFE_RE, escapeScriptUnsafe);
 }
 
 /** The offer facts of the currently selected variant (client patch input). */

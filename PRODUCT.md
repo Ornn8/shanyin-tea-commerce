@@ -123,7 +123,9 @@ list is the acceptance checklist for the "explicit list of merchant facts/assets
 
 - [ ] Structured data (JSON-LD) currently emits only verified seeded facts — canonical URL,
       SKU, displayed price/availability, and the working brand name — with no ratings,
-      reviews, GTINs, or claims; extend it as real assets arrive (ADR-0006)
+      reviews, GTINs, or claims; it is serialized script-safe (HTML metacharacters escaped)
+      against an origin from the trusted `PUBLIC_SITE_URL` configuration (ADR-0006); extend
+      it as real assets arrive
 - [ ] Confirm the locale set (zh-CN, en, ja) and the default locale (currently zh-CN)
 - [ ] Confirm the fallback-locale policy (currently: English for deliberately missing optional keys)
 - [ ] Decide whether any optional message keys (e.g. `home.announcement`) should ship in all locales

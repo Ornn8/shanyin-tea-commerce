@@ -7,7 +7,7 @@
  * and the visible working brand — and never ratings, reviews, GTINs, MPNs,
  * certifications, harvest dates, or scarcity claims (PRODUCT.md).
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   availabilityFromInventory,
   buildProductSchema,
@@ -116,6 +116,44 @@ describe('buildProductSchema (verified facts only)', () => {
   });
 });
 
+describe('serializeProductSchema (script-safe script embedding)', () => {
+  it('escapes a script-breakout name so the JSON-LD element can never be terminated', () => {
+    const payload = '</script><script>alert(1)</script>';
+    const json = serializeProductSchema({ ...BASE, name: `Loose leaf ${payload}` });
+    // No raw less-than may survive; the closing tag sequence must be absent.
+    expect(json).not.toContain('<');
+    expect(json).not.toContain('</script');
+    // The document stays valid JSON and round-trips to the original bytes,
+    // so search engines still see the exact merchant text.
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    expect(parsed.name).toBe(`Loose leaf ${payload}`);
+  });
+
+  it('escapes less-than, greater-than, ampersand, and JS line separators everywhere', () => {
+    const nasty = 'a<b>c&d\u2028e\u2029f';
+    const json = serializeProductSchema({ ...BASE, description: nasty });
+    expect(json).not.toContain('<');
+    expect(json).not.toContain('>');
+    expect(json).not.toContain('&');
+    expect(json).not.toContain('\u2028');
+    expect(json).not.toContain('\u2029');
+    expect(json).toContain('\\u003c');
+    expect(json).toContain('\\u003e');
+    expect(json).toContain('\\u0026');
+    expect(json).toContain('\\u2028');
+    expect(json).toContain('\\u2029');
+    // Escapes are JSON-valid and decode back to the same characters.
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    expect(parsed.description).toBe(nasty);
+  });
+
+  it('does not double-escape literal backslash-u sequences in merchant text', () => {
+    const json = serializeProductSchema({ ...BASE, name: 'literal \\u003c text' });
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    expect(parsed.name).toBe('literal \\u003c text');
+  });
+});
+
 describe('LOW_STOCK_THRESHOLD / isLowStock (shared inventory fact)', () => {
   it('is 5 and marks in-stock variants at or below it as low', () => {
     expect(LOW_STOCK_THRESHOLD).toBe(5);
@@ -127,23 +165,48 @@ describe('LOW_STOCK_THRESHOLD / isLowStock (shared inventory fact)', () => {
   });
 });
 
-describe('originFromHeaders (request-origin canonical URLs)', () => {
-  it('honors forwarded proto/host behind a TLS proxy', () => {
-    const headers = {
-      get(name: string) {
-        return { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'shop.example' }[name] ?? null;
-      },
-    };
-    expect(originFromHeaders(headers)).toBe('https://shop.example');
+describe('originFromHeaders (trusted-configuration canonical origins)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
-  it('falls back to the Host header, then to localhost', () => {
+  it('uses PUBLIC_SITE_URL when configured and never consults request headers', () => {
+    vi.stubEnv('PUBLIC_SITE_URL', 'https://shop.example');
+    const spoofed = {
+      get(name: string) {
+        return { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'evil.example' }[name] ?? null;
+      },
+    };
+    expect(originFromHeaders(spoofed)).toBe('https://shop.example');
+  });
+
+  it('normalizes a trailing slash on the configured origin', () => {
+    vi.stubEnv('PUBLIC_SITE_URL', 'https://shop.example/');
+    expect(originFromHeaders({ get: () => null })).toBe('https://shop.example');
+  });
+
+  it('honors local-development hosts from headers when nothing is configured', () => {
     const hostOnly = {
       get(name: string) {
         return name === 'host' ? 'localhost:3000' : null;
       },
     };
     expect(originFromHeaders(hostOnly)).toBe('http://localhost:3000');
+    const forwarded = {
+      get(name: string) {
+        return { 'x-forwarded-proto': 'https', 'x-forwarded-host': '127.0.0.1:3100' }[name] ?? null;
+      },
+    };
+    expect(originFromHeaders(forwarded)).toBe('https://127.0.0.1:3100');
+  });
+
+  it('never accepts non-local hosts from headers (host-header poisoning guard)', () => {
+    const spoofed = {
+      get(name: string) {
+        return { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'shop.example' }[name] ?? null;
+      },
+    };
+    expect(originFromHeaders(spoofed)).toBe('http://localhost:3000');
     const none = { get: () => null };
     expect(originFromHeaders(none)).toBe('http://localhost:3000');
   });

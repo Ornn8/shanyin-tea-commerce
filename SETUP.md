@@ -50,6 +50,13 @@ credentials and the session secret:
 | `AUTH_SECRET`    | Signs the admin session cookie (long, random value in production)   |
 | `BETTER_AUTH_URL`| Optional public origin used by better-auth (default `http://localhost:3000`) |
 
+New in Issue #4 (`ADR-0006`): the public origin used to build canonical
+links, hreflang alternates, and JSON-LD URLs:
+
+| Variable          | Purpose                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| `PUBLIC_SITE_URL` | Optional trusted absolute public origin (e.g. `https://shop.example.com`). When set, canonical/structured-data URLs use it and forwarded request headers are never trusted; unset in local development, where only `localhost`/`127.0.0.1` on the dev ports are honored from headers |
+
 ## 3. Install dependencies
 
 ```bash
