@@ -14,12 +14,12 @@ permissions:
 
 jobs:
   backlog:
-    uses: Ornn8/dsh-agent-automation/.github/workflows/dispatch-backlog.yml@69cb3077fd000c3bfbd8b8e3214616cbf92f3054
+    uses: Ornn8/dsh-agent-automation/.github/workflows/dispatch-backlog.yml@e0a382935476711188f9e64fc0b8c785e02df069
 
   review-reconcile:
-    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-reviews.yml@69cb3077fd000c3bfbd8b8e3214616cbf92f3054
+    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-reviews.yml@e0a382935476711188f9e64fc0b8c785e02df069
 
   reconcile:
-    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-landing.yml@69cb3077fd000c3bfbd8b8e3214616cbf92f3054
+    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-landing.yml@e0a382935476711188f9e64fc0b8c785e02df069
     with:
       profile_id: github-pr-cycle
