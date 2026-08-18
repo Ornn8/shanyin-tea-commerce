@@ -77,7 +77,8 @@ pnpm db:seed          # prisma db seed  (tsx prisma/seed.ts, upsert-based, idemp
 The seed creates 3 categories and 6 demo products, each localized in `zh-CN`, `en`, and `ja`,
 with language-neutral leaf form (`form`) and caffeine (`caffeine`) demo facts used by catalog
 filtering (ADR-0004), three language-neutral variants per product (package-size SKUs with
-integer-cents CNY prices and inventory — ADR-0005, ADR-0006; the first variant is the
+integer-cents CNY prices and inventory — ADR-0005, ADR-0006; each variant stores an explicit
+0-based position (seed order), and the position-0 variant is the
 storefront default, later ones are selectable on the detail page and include demo low-stock
 and out-of-stock states), localized brewing guidance, and the single allowlisted merchant
 administrator (`ADMIN_EMAIL` / `ADMIN_PASSWORD`); public registration is disabled, so

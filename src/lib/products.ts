@@ -80,10 +80,13 @@ function pickLocalization<T extends { locale: string }>(
 }
 
 /**
- * The variant a shopper sees: the product's first-created variant. The
- * storefront intentionally reads language-neutral facts (SKU, integer-cents
- * price, inventory) from variants only (ADR-0005); unpublished products are
- * never returned.
+ * The variant a shopper sees: the product's default variant — position 0 in
+ * the persisted variant order, with createdAt/id as deterministic secondary
+ * keys (ADR-0006; `createdAt` alone ties for transaction-co-created rows, so
+ * an explicit `position` is persisted by every write path). The storefront
+ * intentionally reads language-neutral facts (SKU, integer-cents price,
+ * inventory) from variants only (ADR-0005); unpublished products are never
+ * returned.
  */
 function primaryVariant(row: ProductRow) {
   return row.variants[0];
@@ -125,7 +128,7 @@ function findProductRow() {
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -142,7 +145,7 @@ export async function getProductBySlug(slug: string, locale: LocaleId): Promise<
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
   });
   return row ? toProductView(row, locale) : null;
@@ -164,7 +167,7 @@ export interface StorefrontVariantView {
 }
 
 export interface ProductDetailView extends ProductView {
-  /** All published variants, first-created first (the default selection). */
+  /** All published variants in persisted position order (variant 0 = default). */
   variants: StorefrontVariantView[];
   /** Brewing guidance — effective value with the ADR-0003/0005 fallback. */
   brewingNotes: string;
@@ -205,7 +208,7 @@ function findRowBySlug(slug: string) {
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
   });
 }
@@ -267,7 +270,7 @@ export async function getCartLines(skus: string[], locale: LocaleId): Promise<Ca
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
   });
   const bySku = new Map<string, CartLine>();
@@ -297,7 +300,7 @@ export async function getProductsBySkus(skus: string[], locale: LocaleId): Promi
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
   });
   const bySku = new Map<string, ProductView>();

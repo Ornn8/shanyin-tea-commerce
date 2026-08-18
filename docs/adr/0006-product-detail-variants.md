@@ -33,7 +33,8 @@ description — the ADR-0003/0005 pick order, never blank.
 
 **Variant selection is pure client state.** The purchase panel
 (`src/components/product-purchase.tsx`) renders a native radio group over the
-product's variants (first-created first = the default selection). Choosing a
+product's variants in persisted position order (position 0 = the default
+selection). Choosing a
 size updates the SKU, price, stock text (in-stock / low-stock / unavailable),
 the media illustration (derived per variant from `slug:variantId`), and
 add-to-cart eligibility entirely in place — no navigation, so the locale
@@ -43,6 +44,18 @@ announcement region, and per-option `aria-label`s that include the localized
 price and availability. Out-of-stock options are disabled and tagged with the
 localized "Unavailable" chip. `LOW_STOCK_THRESHOLD = 5` (`src/lib/catalog-options.ts`)
 derives the low-stock notice from the shared integer inventory fact.
+
+**Deterministic variant order is persisted explicitly.** `ProductVariant`
+carries an integer `position` (0-based, per product). Every write path —
+the seed, `createProduct`, and `replaceVariants` in the admin service —
+stores the merchant's variant order (the editor's row order) as positions,
+and every read path orders by `position` (with `createdAt` as a deterministic
+secondary key). This is required because `createdAt` defaults to
+`CURRENT_TIMESTAMP`, which PostgreSQL evaluates once per transaction: variants
+created together in one transaction tie on `createdAt`, so ordering by it alone
+leaves the row order — and therefore which variant the storefront treats as
+the default (SKU, price, inventory, purchase state, and structured-data
+offer) — nondeterministic.
 
 **Cart lines resolve the exact variant.** The cart cookie already stores SKUs
 (language-neutral). `getCartLines` (`src/lib/products.ts`) maps each SKU back
@@ -57,7 +70,8 @@ Product facts are language-neutral, so each product appears once; there is no
 per-locale duplication by construction.
 
 **Structured data contains verified seeded facts only.** The page renders one
-`application/ld+json` Product schema for the default variant: `@id` and `url`
+`application/ld+json` Product schema for the default variant (position 0):
+`@id` and `url`
 are the canonical URL, `sku` is the language-neutral SKU, `offers` carries the
 integer-derived CNY price (`priceYuanFromCents`), the shared inventory-derived
 availability, and the currency. The schema never emits ratings, reviews,
@@ -97,9 +111,11 @@ storefront uses. Japanese line breaking is guarded globally with
 
 - Every detail-page fact shown to the visitor is also present in structured
   data with matching values, and product facts never duplicate per locale.
-- A merchant adding or reordering variants changes the default selection only
-  when they reorder the first-created row; the storefront otherwise keeps
-  showing the previously default variant — deterministic and tested.
+- A merchant adding, removing, or reordering variants changes the default
+  selection through the persisted positions (row order in the editor maps to
+  `position` 0..n); the storefront otherwise keeps
+  showing the previous default variant — deterministic and tested, including
+  for rows created in the same transaction, which tie on `createdAt`.
 - The JSON-LD patch is a small, guarded DOM update; if the element is absent
   or unparseable it is a silent no-op rather than a crash.
 - The demo seed now carries three variants per tea (including low-stock and

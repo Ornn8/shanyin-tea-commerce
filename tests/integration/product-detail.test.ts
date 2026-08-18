@@ -26,7 +26,12 @@ import {
 const hasDb = Boolean(process.env.DATABASE_URL);
 const describeDb = hasDb ? describe : describe.skip;
 
-const TEMP_SLUGS = ['demo-detail-multi', 'demo-detail-unpublished', 'demo-detail-unavailable'] as const;
+const TEMP_SLUGS = [
+  'demo-detail-multi',
+  'demo-detail-unpublished',
+  'demo-detail-unavailable',
+  'demo-detail-order',
+] as const;
 
 describeDb('product detail (ADR-0006)', () => {
   beforeAll(async () => {
@@ -44,9 +49,13 @@ describeDb('product detail (ADR-0006)', () => {
         published: true,
         variants: {
           create: [
-            { sku: 'SHY-DET-001', name: '100g', priceCents: 15000, inventory: 10 },
-            { sku: 'SHY-DET-002', name: '50g', priceCents: 7500, inventory: 3 },
-            { sku: 'SHY-DET-003', name: '250g', priceCents: 30000, inventory: 0 },
+            // Explicit positions: all three rows share the same transaction
+            // timestamp (PostgreSQL CURRENT_TIMESTAMP is transaction-stable),
+            // so only the persisted position (ADR-0006) makes the order
+            // deterministic — the fixture would otherwise tie on createdAt.
+            { sku: 'SHY-DET-001', name: '100g', priceCents: 15000, inventory: 10, position: 0 },
+            { sku: 'SHY-DET-002', name: '50g', priceCents: 7500, inventory: 3, position: 1 },
+            { sku: 'SHY-DET-003', name: '250g', priceCents: 30000, inventory: 0, position: 2 },
           ],
         },
         localizations: {
@@ -87,7 +96,7 @@ describeDb('product detail (ADR-0006)', () => {
         caffeine: 'LOW',
         categoryId: oolong.id,
         published: false,
-        variants: { create: [{ sku: 'SHY-DET-004', name: '100g', priceCents: 12000, inventory: 5 }] },
+        variants: { create: [{ sku: 'SHY-DET-004', name: '100g', priceCents: 12000, inventory: 5, position: 0 }] },
         localizations: {
           create: [
             {
@@ -111,8 +120,8 @@ describeDb('product detail (ADR-0006)', () => {
         published: true,
         variants: {
           create: [
-            { sku: 'SHY-DET-005', name: '200g', priceCents: 20000, inventory: 0 },
-            { sku: 'SHY-DET-006', name: '100g', priceCents: 10000, inventory: 5 },
+            { sku: 'SHY-DET-005', name: '200g', priceCents: 20000, inventory: 0, position: 0 },
+            { sku: 'SHY-DET-006', name: '100g', priceCents: 10000, inventory: 5, position: 1 },
           ],
         },
         localizations: {
@@ -134,7 +143,7 @@ describeDb('product detail (ADR-0006)', () => {
     await prisma.$disconnect();
   });
 
-  it('returns every variant in first-created order with language-neutral facts', async () => {
+  it('returns every variant in persisted position order with language-neutral facts', async () => {
     const detail = await getProductDetail('demo-detail-multi', 'en');
     expect(detail).not.toBeNull();
     expect(detail!.variants.map((v) => v.sku)).toEqual([
@@ -179,6 +188,57 @@ describeDb('product detail (ADR-0006)', () => {
   it('never returns unpublished products or unknown slugs', async () => {
     expect(await getProductDetail('demo-detail-unpublished', 'en')).toBeNull();
     expect(await getProductDetail('no-such-slug', 'en')).toBeNull();
+  });
+
+  it('variants tie on createdAt inside one transaction, so only the persisted position orders them (regression, ADR-0006)', async () => {
+    // Insertion order deliberately differs from position order (250g first,
+    // 100g at position 0). All three rows share the transaction-stable
+    // CURRENT_TIMESTAMP, so the pre-fix `orderBy: { createdAt: 'asc' }` could
+    // not deterministically pick 100g as the default; the persisted position
+    // must.
+    const category = await prisma.category.findUniqueOrThrow({ where: { slug: 'oolong-tea' } });
+    await prisma.product.create({
+      data: {
+        slug: 'demo-detail-order',
+        origin: 'Demo origin',
+        form: 'LOOSE',
+        caffeine: 'MEDIUM',
+        categoryId: category.id,
+        published: true,
+        variants: {
+          create: [
+            { sku: 'SHY-DET-011', name: '250g', priceCents: 30000, inventory: 0, position: 2 },
+            { sku: 'SHY-DET-012', name: '100g', priceCents: 15000, inventory: 10, position: 0 },
+            { sku: 'SHY-DET-013', name: '50g', priceCents: 7500, inventory: 3, position: 1 },
+          ],
+        },
+        localizations: {
+          create: [
+            {
+              locale: 'en',
+              name: 'Ordered Demo Tea',
+              description: 'Position-order regression fixture.',
+              tastingNotes: 'Demo notes.',
+            },
+          ],
+        },
+      },
+    });
+
+    const detail = await getProductDetail('demo-detail-order', 'en');
+    expect(detail!.variants.map((v) => v.sku)).toEqual(['SHY-DET-012', 'SHY-DET-013', 'SHY-DET-011']);
+    // The default (position 0) drives SKU, price, and availability facts.
+    expect(detail!.sku).toBe('SHY-DET-012');
+    expect(detail!.priceCents).toBe(15000);
+    expect(detail!.inventory).toBe(10);
+
+    // Prove the tie the old ordering depended on: every row has the same
+    // createdAt (single transaction), so timestamp order was nondeterministic.
+    const rows = await prisma.productVariant.findMany({
+      where: { sku: { in: ['SHY-DET-011', 'SHY-DET-012', 'SHY-DET-013'] } },
+      select: { createdAt: true },
+    });
+    expect(new Set(rows.map((row) => row.createdAt.getTime())).size).toBe(1);
   });
 
   it('reports an unavailable default variant with an in-stock alternative', async () => {

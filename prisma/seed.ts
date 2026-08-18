@@ -44,7 +44,10 @@ interface ProductSeed {
   categorySlug: string;
   /**
    * Variants in seed order; the FIRST entry becomes the storefront default
-   * (first-created) variant shown by catalog cards and cart totals (ADR-0005).
+   * variant shown by catalog cards and cart totals (ADR-0005/0006). Positions
+   * are persisted explicitly (0-based), because `createdAt` is
+   * transaction-stable in PostgreSQL and would otherwise tie every variant of
+   * one product, leaving the default nondeterministic.
    * Later entries are package sizes a shopper can select on the detail page
    * (ADR-0006) — including demo low-stock and out-of-stock states, which are
    * derived from the shared integer inventory fact, never per-locale.
@@ -335,11 +338,18 @@ async function seedProducts() {
       },
     });
 
-    for (const variant of product.variants) {
+    for (const [index, variant] of product.variants.entries()) {
       await prisma.productVariant.upsert({
         where: { sku: variant.sku },
-        update: { productId: dbProduct.id, name: variant.name, priceCents: variant.priceCents, inventory: variant.inventory },
-        create: { productId: dbProduct.id, ...variant },
+        update: {
+          productId: dbProduct.id,
+          name: variant.name,
+          priceCents: variant.priceCents,
+          inventory: variant.inventory,
+          // Seed order is the deterministic variant order (ADR-0006).
+          position: index,
+        },
+        create: { productId: dbProduct.id, position: index, ...variant },
       });
     }
 

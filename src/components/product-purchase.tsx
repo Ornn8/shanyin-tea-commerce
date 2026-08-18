@@ -37,7 +37,7 @@ interface ProductPurchaseProps {
   /** Localized alt text for the product media (variants share it). */
   imageAlt: string;
   variants: PurchaseVariant[];
-  /** SKU initially selected: the product's first-created variant. */
+  /** SKU initially selected: the product's default variant (position 0). */
   defaultSku: string;
   strings: PurchaseStrings;
 }

@@ -54,8 +54,8 @@ export default async function ProductPage({ params }: ProductPageProps) {
   const recommended = await getRelatedProducts({ slug, locale, limit: RECOMMENDATION_LIMIT });
   const origin = originFromHeaders(await headers());
   const canonicalUrl = absoluteProductUrl(origin, locale, slug);
-  // The structured data describes the default (first-created) variant; the
-  // client picker patches the offers block on selection (ADR-0006).
+  // The structured data describes the default variant (persisted position 0,
+  // ADR-0006); the client picker patches the offers block on selection.
   const jsonLd = serializeProductSchema({
     canonicalUrl,
     name: product.name,

@@ -57,7 +57,7 @@ test.describe('product detail — variant journeys per locale', () => {
 
   for (const locale of LOCALE_IDS) {
     test(`${locale}: variant selection updates price, SKU, stock, JSON-LD, and cart`, async ({ page }, testInfo) => {
-      // 1. In-stock default: first-created variant (100g) facts visible.
+      // 1. In-stock default: position-0 variant (100g) facts visible.
       await page.goto(`/${locale}/products/spring-longjing`);
       await expect(page.getByTestId('product-name')).toHaveText(NAMES[locale].longjing);
       await expect(page.getByTestId('variant-price')).toContainText('1,280');

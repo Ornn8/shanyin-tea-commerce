@@ -52,8 +52,8 @@ export async function seedProductDetailE2e(): Promise<void> {
       publishedAt: new Date(),
       variants: {
         create: [
-          { sku: 'E2E-PRD-001', name: '200g', priceCents: 30000, inventory: 0 },
-          { sku: 'E2E-PRD-002', name: '100g', priceCents: 15000, inventory: 6 },
+          { sku: 'E2E-PRD-001', name: '200g', priceCents: 30000, inventory: 0, position: 0 },
+          { sku: 'E2E-PRD-002', name: '100g', priceCents: 15000, inventory: 6, position: 1 },
         ],
       },
       localizations: {
@@ -94,7 +94,7 @@ export async function seedProductDetailE2e(): Promise<void> {
       caffeine: 'LOW',
       categoryId: green.id,
       published: false,
-      variants: { create: [{ sku: 'E2E-PRD-003', name: '100g', priceCents: 9000, inventory: 5 }] },
+      variants: { create: [{ sku: 'E2E-PRD-003', name: '100g', priceCents: 9000, inventory: 5, position: 0 }] },
       localizations: {
         create: [
           {

@@ -8,7 +8,8 @@
  * working brand identity. No ratings, reviews, GTINs, MPNs, certifications,
  * harvest dates, scarcity, or other claims are ever emitted (PRODUCT.md).
  *
- * The server renders the schema for the default (first-created) variant, and
+ * The server renders the schema for the default variant (persisted position
+ * 0, ADR-0006), and
  * the client variant selector patches the `offers` block in place on
  * selection so the structured data always matches the visible price and
  * availability (Acceptance: "Structured data contains only verified seeded

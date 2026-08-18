@@ -21,7 +21,8 @@
   `x-default` → English, preferring the seeded `seoTitle`/`seoDescription` and falling back
   to the localized name/description (ADR-0003/0005 pick order, never blank).
 - **Client-side variant selection** (`src/components/product-purchase.tsx`). A native radio
-  group over all of the product's variants (first-created = default) updates SKU, price,
+  group over all of the product's variants in persisted position order (position 0 = the
+  default) updates SKU, price,
   stock text (in-stock / low-stock / unavailable), the per-variant media illustration, and
   add-to-cart eligibility entirely in place — no navigation, so the locale and the
   accessibility state are preserved. Native radio semantics, per-option `aria-label`s,
@@ -37,7 +38,8 @@
   are language-neutral so there is no per-locale duplication, and unpublished products are
   never exposed.
 - **Structured data with verified facts only** (`src/lib/product-schema.ts`). One
-  `application/ld+json` Product schema rendered for the default variant: canonical URL
+  `application/ld+json` Product schema rendered for the default variant (persisted position
+  0, ADR-0006): canonical URL
   `@id`/`url`, language-neutral SKU, integer-derived CNY price, shared-inventory-derived
   availability, and the visible working brand. No ratings, reviews, GTINs, MPNs,
   certifications, harvest dates, or scarcity; `image` omitted until real merchant
@@ -49,7 +51,8 @@
   new `[locale]/error.tsx` are localized via the pathname-derived locale using the same
   catalog keys. Japanese line breaking is guarded globally with `overflow-wrap: break-word`.
 - **Seed truth extended** (`prisma/seed.ts`, PRODUCT.md): every seeded tea now carries three
-  language-neutral package-size variants (first = storefront default) including demo
+  language-neutral package-size variants (position 0 = storefront default, persisted
+  explicitly) including demo
   low-stock and out-of-stock states, plus localized brewing guidance in all three locales.
 
 ## Verification performed
@@ -124,11 +127,39 @@ applied on the same branch:
   attacker-chosen origins (host-header poisoning guard, unit-tested;
   documented in `.env.example` and SETUP.md).
 
+## Deterministic variant order (agent review repair)
+
+The automatic review of PR #25 (BLOCK, second round) identified that
+`ProductVariant.createdAt` defaults to `CURRENT_TIMESTAMP`, which PostgreSQL
+evaluates once per transaction — variants created together in one transaction
+tie on `createdAt`, and SQL provides no deterministic order for ties. Because
+the storefront consumes `variants[0]` as the default SKU, price, inventory,
+purchase state, and structured-data offer, the intended default could be
+replaced by another variant (including an unavailable one). Root-cause fix on
+the same branch:
+
+- `prisma/schema.prisma` + migration `20260819000000_variant_position` — the
+  `ProductVariant` table gains an explicit 0-based `position` column (backfilled
+  deterministically per product by `createdAt`/`id`), with a compound
+  `(productId, position)` index.
+- Every write path persists the merchant's variant order: `prisma/seed.ts`
+  (seed order), `createProduct` and `replaceVariants` in
+  `src/lib/admin/service.ts` (editor row order → positions 0..n).
+- Every read path orders variants by `position` first (`src/lib/products.ts`,
+  `src/lib/admin/products.ts`, `src/lib/admin/service.ts`), keeping `createdAt`
+  as the deterministic secondary key.
+- Regression coverage: the product-detail integration suite now creates a
+  fixture whose insertion order deliberately differs from its positions and
+  proves the rows tie on `createdAt` while `getProductDetail` still returns
+  position order; integration and e2e fixtures set explicit positions.
+- Docs updated: ADR-0006 (decision + consequences), ADR-0005, PRODUCT.md,
+  SETUP.md, and this receipt.
+
 ## Caveats (recorded, not blocking)
 
 - The JSON-LD patch mutates the rendered script element in place; it is a guarded no-op when
-  the element is absent or unparseable. Structured data for the default variant is what
-  crawlers receive; the post-select patch keeps the on-page state consistent.
+  the element is absent or unparseable. Structured data for the default variant (position 0)
+  is what crawlers receive; the post-select patch keeps the on-page state consistent.
 - Variant selection is per-page client state: a locale switch (or refresh) returns to the
   default variant. The acceptance contract requires locale/accessibility preservation during
   selection, which this satisfies; URL-encoded variant state is out of scope.

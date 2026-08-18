@@ -19,7 +19,8 @@ is **demo content** unless explicitly marked otherwise.
    `docs/adr/0005-merchant-administration-and-audit.md`, and
    `docs/adr/0006-product-detail-variants.md`). Prices and inventory live on language-neutral
    **variants** (`ProductVariant`: globally unique SKU, integer-cents CNY price, non-negative
-   inventory); the catalog and cart show the first-created variant, and the product detail
+   inventory, explicit 0-based `position` per product); the catalog and cart show the default
+   variant (position 0), and the product detail
    page lets the shopper select any variant (package size). Only product copy (name,
    description, tasting notes, brewing guidance, SEO text, media alt) is localized; the
    display labels for leaf form and caffeine are localized message keys
@@ -39,7 +40,7 @@ All prices are in CNY (¥), stored as integer cents (`priceCents`), displayed wi
 | 5 | `liubao`         | SHY-D-001  | Liubao Dark Tea / 六堡茶 / 六堡茶 | 720.00  | 30 | Compressed | Low | Liubao Town, Wuzhou, Guangxi         | Dark tea |
 | 6 | `ripe-puerh`     | SHY-D-002  | Ripe Pu-erh / 云南熟普 / 熟プーアル茶 | 640.00 | 18 | Compressed | Low | Menghai, Yunnan                      | Dark tea |
 
-The **Price/Inventory** columns above show the **first-created variant** — the storefront
+The **Price/Inventory** columns above show the **default variant (position 0)** — the storefront
 default used by catalog cards and cart totals. Every product also carries additional
 package-size variants selectable on the detail page (ADR-0006):
 
