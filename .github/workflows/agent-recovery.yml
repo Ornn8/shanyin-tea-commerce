@@ -17,7 +17,7 @@ jobs:
     if: >-
       contains(fromJSON('["failure", "cancelled", "timed_out", "startup_failure", "stale"]'), github.event.workflow_run.conclusion)
       && github.event.workflow_run.name != github.workflow
-    uses: Ornn8/dsh-agent-automation/.github/workflows/observe-agent-fault.yml@bdd6265b3f636a01888548e5471e9caa3932321c
+    uses: Ornn8/dsh-agent-automation/.github/workflows/observe-agent-fault.yml@efc20873829a635ba218abf822bbfc443688d0ed
     with:
       source_run_id: ${{ github.event.workflow_run.id }}
 
@@ -27,6 +27,6 @@ jobs:
       always()
       && contains(fromJSON('["failure", "cancelled", "timed_out", "startup_failure", "stale"]'), github.event.workflow_run.conclusion)
       && github.event.workflow_run.name != github.workflow
-    uses: Ornn8/dsh-agent-automation/.github/workflows/recover-backlog.yml@bdd6265b3f636a01888548e5471e9caa3932321c
+    uses: Ornn8/dsh-agent-automation/.github/workflows/recover-backlog.yml@efc20873829a635ba218abf822bbfc443688d0ed
     with:
       source_run_id: ${{ github.event.workflow_run.id }}
