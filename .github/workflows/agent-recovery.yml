@@ -14,19 +14,13 @@ permissions:
 
 jobs:
   observe:
-    if: >-
-      contains(fromJSON('["failure", "cancelled", "timed_out", "startup_failure", "stale"]'), github.event.workflow_run.conclusion)
-      && github.event.workflow_run.name != github.workflow
     uses: Ornn8/dsh-agent-automation/.github/workflows/observe-agent-fault.yml@efc20873829a635ba218abf822bbfc443688d0ed
     with:
       source_run_id: ${{ github.event.workflow_run.id }}
 
   recover:
     needs: observe
-    if: >-
-      always()
-      && contains(fromJSON('["failure", "cancelled", "timed_out", "startup_failure", "stale"]'), github.event.workflow_run.conclusion)
-      && github.event.workflow_run.name != github.workflow
+    if: always()
     uses: Ornn8/dsh-agent-automation/.github/workflows/recover-backlog.yml@efc20873829a635ba218abf822bbfc443688d0ed
     with:
       source_run_id: ${{ github.event.workflow_run.id }}
