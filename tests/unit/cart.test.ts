@@ -4,6 +4,8 @@
  * These cover the pure, database-free core: signed serialization and
  * verification (tamper/expiry detection), the bounded pure cart operations,
  * display-only client parsing, and the coarse shipping estimate boundaries.
+ * Signing lives in the server-only module `src/lib/cart-signing.ts`; the
+ * browser-safe `src/lib/cart.ts` provides the display parsers and pure ops.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -12,15 +14,14 @@ import {
   CART_MAX_QTY,
   EMPTY_CART,
   addItem,
-  parseCart,
   parseCartForDisplay,
   readCartForDisplay,
   removeItem,
-  serializeCart,
   setItemQuantity,
   totalQuantity,
   type CartItem,
 } from '@/lib/cart';
+import { parseCart, serializeCart } from '@/lib/cart-signing';
 import {
   SHIPPING_FLAT_CENTS,
   SHIPPING_FREE_THRESHOLD_CENTS,

@@ -21,18 +21,27 @@ screen reader, focus restoration, long labels, Japanese line breaking) at
 ## Decision
 
 **One signed, encrypted-free cookie is the cart.** The cart stays in a single
-`shanyin_cart` cookie (`src/lib/cart.ts`), a stateless design consistent with
-the current storefront (no new table, no migration). The payload is JSON
-holding only language-neutral data — SKU, quantity, an integer-cents display
-price snapshot captured at add time, and the item's add timestamp — plus an
-expiry. It is signed with HMAC-SHA256 (`CART_SECRET`, falling back to
-`AUTH_SECRET` locally) so the server can detect any forgery or mutation:
-an unsigned, tampered, or expired cookie reads back as `expired` and the
-storefront clears it with a localized notice — a stale or forged cart is
-never displayed. The value is percent-encoded on the wire (Next.js encodes
-`cookies().set` values and decodes on read); the client badges decode it
-leniently **without** signature verification purely for display, because the
-signing key never reaches the browser.
+`shanyin_cart` cookie, a stateless design consistent with the current
+storefront (no new table, no migration). The payload is JSON holding only
+language-neutral data — SKU, quantity, an integer-cents display price snapshot
+captured at add time, and the item's add timestamp — plus an expiry. It is
+signed with HMAC-SHA256 (`CART_SECRET`, falling back to `AUTH_SECRET` locally)
+so the server can detect any forgery or mutation: an unsigned, tampered, or
+expired cookie reads back as `expired` and the storefront clears it with a
+localized notice — a stale or forged cart is never displayed. The value is
+percent-encoded on the wire (Next.js encodes `cookies().set` values and decodes
+on read); the client badges decode it leniently **without** signature
+verification purely for display, because the signing key never reaches the
+browser.
+
+The HMAC boundary is isolated so the signing key never reaches the browser
+graph: `src/lib/cart.ts` is the browser-safe core (constants, types, the
+canonical payload form, display parsing, and the pure cart operations — no
+Node.js/Next.js/database imports), while the signed wire functions
+`serializeCart` / `parseCart` live in the server-only
+`src/lib/cart-signing.ts` (imports `node:crypto`). Server components, server
+actions, and tests import signing from there; client components import only the
+core, so the browser bundle carries no `node:crypto`.
 
 **Every mutation is a server action that re-validates before writing.**
 `src/lib/cart-actions.ts` exposes `addToCart`, `setCartItemQuantity`,
@@ -74,6 +83,18 @@ cookie that already matches is left untouched, so it is safe to run on every
 view. Cookie mutation is a Server Action in Next.js, so this persistence is
 deliberately not done during the render itself.
 
+Reconciliation is serialized against the shopper's own mutations by two
+guards, so a background write can never fight a newer action:
+
+- **Gating** — the page only asks for reconciliation when this render actually
+  surfaced something to persist (an expired/void cookie, a dropped line, or a
+  stock clamp). A plain revalidation render issues no competing cookie write.
+- **Compare-and-set** — the shell passes this render's exact cookie value to
+  `reconcileCartAction`; if the cookie has since been rewritten by a user
+  mutation (or another tab), the action skips its write and reports no change.
+  A reconcile finishing last can therefore never resurrect a removed item or
+  undo a new quantity.
+
 **Subtotal + clearly labeled non-binding shipping estimate.** Totals use
 revalidated prices and effective quantities in integer CNY cents. The shipping
 estimate (`src/lib/shipping-estimate.ts`) is a deterministic demo rule —
@@ -114,6 +135,10 @@ native per-character breaking), so a Japanese long name never overflows the
   empty, so the badge never contradicts the page's "cleared" state. The badge
   may still briefly count a line whose product was unpublished until a cart
   view or mutation prunes it — recorded, not blocking.
+- Reconcile persistence never fights a newer user action: it is gated to
+  renders that surfaced something to persist, and its write is compare-and-set
+  against the rendered cookie value, so a background reconcile cannot clobber a
+  remove/quantity/clear that landed after the render.
 - New unit/integration suites (`tests/unit/cart.test.ts`,
   `tests/integration/cart.test.ts`) and a Playwright spec
   (`e2e/cart.spec.ts`) cover the signed model, all localized states, the

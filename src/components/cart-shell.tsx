@@ -46,6 +46,12 @@ interface CartShellProps {
   expired: boolean;
   /** True when at least one cart SKU was dropped (unavailable/unpublished). */
   removedNotice: boolean;
+  /** True when this render surfaced something to persist (expired/void cookie,
+   * dropped line, or a stock clamp) — gates the single background reconcile. */
+  needsReconcile: boolean;
+  /** The exact decoded `shanyin_cart` cookie value this render was built from
+   * (compare-and-set token for the guarded reconcile write). */
+  expectedCartCookie?: string | null;
 }
 
 /**
@@ -66,12 +72,17 @@ export function CartShell({
   totals,
   expired,
   removedNotice,
+  needsReconcile,
+  expectedCartCookie,
 }: CartShellProps) {
   const t = createT(locale);
   const router = useRouter();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [pending, startTransition] = useTransition();
   const [announce, setAnnounce] = useState<{ id: number; text: string } | null>(null);
+  // Guard so the mount reconcile runs once per page view even if the
+  // server-rendered props change on a refresh.
+  const reconciledRef = useRef(false);
 
   const empty = lines.length === 0;
 
@@ -79,15 +90,27 @@ export function CartShell({
   // clear an expired/void cookie, prune unpublished/unknown lines, and clamp
   // quantities to the current inventory — so the header badge cannot keep
   // showing a stale count and revealed shortages cannot reappear after stock
-  // is restored. Idempotent: a cookie that already matches is left untouched.
-  // There is deliberately no router.refresh() here so the localized
-  // expired/removed notices the server rendered stay visible; the badge is
-  // synced via the `shanyin:cart` event instead.
+  // is restored. Two guards keep this from racing the shopper's own actions:
+  //
+  //  1. Gating — it only fires when this render actually surfaced something to
+  //     persist (expired/void cookie, dropped lines, or a stock clamp), so a
+  //     plain revalidation render issues no competing cookie write.
+  //  2. Compare-and-set — the server action is handed this render's exact
+  //     cookie value and skips its write if a user mutation has since changed
+  //     the cookie, so a background reconcile can never resurrect a removed
+  //     item or undo a new quantity.
+  //
+  // Idempotent: a cookie that already matches is left untouched. There is
+  // deliberately no router.refresh() here so the localized expired/removed
+  // notices the server rendered stay visible; the badge is synced via the
+  // `shanyin:cart` event instead.
   useEffect(() => {
+    if (!needsReconcile || reconciledRef.current) return;
+    reconciledRef.current = true;
     let cancelled = false;
     (async () => {
       try {
-        const result = await reconcileCartAction();
+        const result = await reconcileCartAction(expectedCartCookie);
         if (!cancelled && result.ok && result.changed) {
           window.dispatchEvent(new Event('shanyin:cart'));
         }
@@ -99,7 +122,7 @@ export function CartShell({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [needsReconcile, expectedCartCookie]);
 
   function notify(text: string) {
     setAnnounce((prev) => ({ id: (prev?.id ?? 0) + 1, text }));

@@ -165,3 +165,59 @@ Verification on Node.js 24-equivalent checks (locally Node 22, pass identical):
   across reloads; an unpublished line is pruned from the cookie and does not reappear after
   re-publication; a stock clamp is persisted so the quantity does not jump back when stock is
   restored.
+
+## Repair — review reply on head `89139dc` (2026-08-19)
+
+The agent review blocked head `89139dc` with two **[P1] product-pr** findings, and the exact-head
+`CI` workflow was failing its cart revalidation e2e:
+
+1. **Node crypto enters the client module graph** — `src/lib/cart.ts:35` imports `node:crypto`
+   at the top level while client entry points (`cart-button.tsx`, `cart-shell.tsx`) import
+   runtime exports from the same module, so the node builtin is resolved for the browser graph.
+   (The `CI` production build happened to pass; the defect is the browser bundle carrying a
+   `node:crypto` reference alongside display-only code that must never need it.)
+2. **Background reconciliation can overwrite a user mutation** — the mount-time
+   `reconcileCartAction` and a user mutation (`setQuantity`/`remove`/`empty`) can both read the
+   same old cookie and return competing cookie writes; if reconciliation finishes last it can
+   restore a stale snapshot (resurrect a removed item / undo a new quantity).
+
+Root cause 1 fix — move the HMAC boundary into a server-only module:
+
+- `src/lib/cart-signing.ts` (new) — `cartSecret`, signing/verification, `serializeCart`,
+  `parseCart`, and the legacy `readCartCookie`. Imports `node:crypto`; must never be imported
+  from the browser graph.
+- `src/lib/cart.ts` — now the browser-safe core: constants, types, the canonical payload form
+  (`cart.ts` was already documented as "pure (no Next.js or database imports) and
+  unit-testable"), the display-only badge parsers (`parseCartForDisplay`, `readCartForDisplay`),
+  and the pure bounded operations. Client components import only from here, so the browser
+  bundle carries no `node:crypto`.
+- Importers updated: `cart-actions.ts` and `cart/page.tsx` (`parseCart`/`serializeCart` from
+  `cart-signing`), `tests/unit/cart.test.ts` and `e2e/cart.spec.ts` (signing imports split).
+
+Root cause 2 fix — serialize reconciliation against mutations with a gated, guarded write:
+
+- `src/app/[locale]/cart/page.tsx` — computes `needsReconcile` (expired/void cookie, dropped
+  line, or a stock clamp) and passes it plus the exact decoded cookie value this render was
+  built from to the shell.
+- `src/components/cart-shell.tsx` — the reconcile effect fires at most once per page view and
+  ONLY when `needsReconcile` is true (a plain revalidation render issues no competing write),
+  passing the render's cookie value as a compare-and-set token.
+- `src/lib/cart-actions.ts` — `reconcileCartAction(expectedCookieValue)` compares the current
+  cookie to the value the dispatching render saw and skips its write when a newer mutation
+  changed it, so a background reconcile can never clobber a remove/quantity/clear. This is the
+  "versioned write" option the review offered.
+
+The gating also removes the CI flake: the `server revalidation` e2e (`e2e/cart.spec.ts:306`)
+failed because the price-change render's in-flight reconcile could clamp the cookie to the new
+inventory before the next render read it, hiding the insufficient-stock notice; a render with
+nothing to persist now issues no reconcile at all, so the reload observes the clamped state the
+test asserts.
+
+Verification (CI-equivalent locally on Node 22, matching Node 24 results):
+
+- `pnpm i18n:check`, `pnpm lint`, `pnpm typecheck` — pass.
+- `pnpm test` — 153 tests pass (13 files), cart unit suite (27) unchanged with split imports.
+- `pnpm build` — passes; client bundle no longer pulls `node:crypto`.
+- `pnpm e2e` — 96 Playwright tests pass (2 projects × 48), including the previously flaky
+  `server revalidation: stock clamp, price change, and unpublish removal` and the three
+  reconciliation journeys (expired cleanup, unpublished prune, persisted clamp).

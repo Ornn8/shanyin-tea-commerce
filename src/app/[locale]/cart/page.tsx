@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { notFound } from 'next/navigation';
 import { isLocaleId, type LocaleId } from '@/i18n/registry';
-import { parseCart } from '@/lib/cart';
+import { parseCart } from '@/lib/cart-signing';
 import { resolveCartItems, type CartLineView } from '@/lib/products';
 import { estimateShipping } from '@/lib/shipping-estimate';
 import { CartShell, type CartShellLine } from '@/components/cart-shell';
@@ -31,7 +31,8 @@ export default async function CartPage({ params }: CartPageProps) {
 
   const cookieStore = await cookies();
   // Next.js percent-decodes the cookie value; parseCart verifies the HMAC.
-  const state = parseCart(cookieStore.get('shanyin_cart')?.value);
+  const expectedCartCookie = cookieStore.get('shanyin_cart')?.value;
+  const state = parseCart(expectedCartCookie);
 
   let lines: CartLineView[] = [];
   let removedNotice = false;
@@ -40,6 +41,15 @@ export default async function CartPage({ params }: CartPageProps) {
     lines = resolution.lines;
     removedNotice = resolution.removedSkus.length > 0;
   }
+
+  // Whether this render surfaced something the shell must persist (ADR-0007):
+  // an expired/void cookie, a dropped line, or a stock clamp. The client
+  // reconcile is gated on this so a plain revalidation render issues no
+  // competing cookie write.
+  const needsReconcile =
+    state.status === 'expired' ||
+    removedNotice ||
+    lines.some((line) => line.qty !== line.effectiveQty);
 
   const subtotalCents = lines.reduce((sum, line) => sum + line.effectiveQty * line.priceCents, 0);
   const shipping = estimateShipping(subtotalCents);
@@ -74,6 +84,8 @@ export default async function CartPage({ params }: CartPageProps) {
       totals={totals}
       expired={state.status === 'expired'}
       removedNotice={removedNotice}
+      needsReconcile={needsReconcile}
+      expectedCartCookie={expectedCartCookie}
     />
   );
 }

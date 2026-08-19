@@ -18,6 +18,14 @@
  * JavaScript so the header badge can show a count, but the server never
  * trusts an unverified payload.
  *
+ * THIS MODULE IS BROWSER-SAFE AND IS SAFE TO IMPORT ANYWHERE: it carries no
+ * Node.js, Next.js, or database imports, so client components (the badge and
+ * the cart shell), server components, and unit tests all share it. The HMAC
+ * signing/verification boundary lives in `src/lib/cart-signing.ts` (server
+ * only — it imports `node:crypto`), which provides the signed wire functions
+ * `serializeCart` / `parseCart`. That module must never be imported from the
+ * browser graph.
+ *
  * Revalidation (server-side, every render of the cart)
  * ----------------------------------------------------
  * Quantity bounds are enforced server-side: 1..CART_MAX_QTY per line, additive
@@ -29,10 +37,7 @@
  * price. The demo has no checkout, so there is no inventory reservation;
  * "atomic" here means one server round trip that re-validates and applies the
  * whole cart state (no client-side arithmetic is trusted).
- *
- * This module is pure (no Next.js or database imports) and unit-testable.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const CART_COOKIE = 'shanyin_cart';
 
@@ -42,7 +47,7 @@ export const CART_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 /** Hard upper bound per line; a quantity above this is never accepted. */
 export const CART_MAX_QTY = 99;
 
-const CART_PAYLOAD_VERSION = 1 as const;
+export const CART_PAYLOAD_VERSION = 1 as const;
 
 export interface CartItem {
   /** Language-neutral SKU of the exact variant added. */
@@ -55,7 +60,8 @@ export interface CartItem {
   addedAt: number;
 }
 
-interface CartPayload {
+/** Wire payload shape. Exported for the server-only signing module. */
+export interface CartPayload {
   v: typeof CART_PAYLOAD_VERSION;
   items: CartItem[];
   /** Epoch seconds at which the cart expires. */
@@ -71,43 +77,17 @@ export interface CartState {
 
 export const EMPTY_CART: CartState = { status: 'empty', items: [] };
 
-// ---------------------------------------------------------------------------
-// Secrets and signing
-// ---------------------------------------------------------------------------
-
-/** Key used to sign the cart payload. CART_SECRET wins; AUTH_SECRET is the
- * local fallback so a demo checkout works with the existing .env. */
-export function cartSecret(): string {
-  return process.env.CART_SECRET ?? process.env.AUTH_SECRET ?? 'dev-secret-shanyin-cart';
-}
-
 /** Deterministic canonical form of the payload (stable field order, no raw
- * newlines): the JSON text of the items array plus version and expiry. */
-function canonical(payload: CartPayload): string {
+ * newlines): the JSON text of the items array plus version and expiry. The
+ * server-only signing module HMACs this exact form, so it must stay stable
+ * across serialize/parse. Exported for `src/lib/cart-signing.ts`. */
+export function canonical(payload: CartPayload): string {
   return `v=${payload.v}|exp=${payload.exp}|items=${JSON.stringify(payload.items)}`;
 }
 
-function signPayload(payload: CartPayload): string {
-  return createHmac('sha256', cartSecret()).update(canonical(payload)).digest('base64url');
-}
-
-function verifyPayload(payload: CartPayload, signature: string): boolean {
-  const expected = createHmac('sha256', cartSecret()).update(canonical(payload)).digest();
-  let provided: Buffer;
-  try {
-    provided = Buffer.from(signature, 'base64url');
-  } catch {
-    return false;
-  }
-  if (expected.length !== provided.length) return false;
-  return timingSafeEqual(expected, provided);
-}
-
-// ---------------------------------------------------------------------------
-// Serialization
-// ---------------------------------------------------------------------------
-
-function isCartItem(value: unknown): value is CartItem {
+/** Sanity filter for deserialized lines; shared by the server-only signing
+ * module and the display-only parsers. */
+export function isCartItem(value: unknown): value is CartItem {
   if (typeof value !== 'object' || value === null) return false;
   const item = value as Record<string, unknown>;
   return (
@@ -123,77 +103,14 @@ function isCartItem(value: unknown): value is CartItem {
   );
 }
 
-/**
- * Serialize cart items into the signed cookie VALUE (raw JSON — not
- * percent-encoded). Next.js `cookies().set()` percent-encodes the value when
- * writing `Set-Cookie` and decodes it again on read, so pre-encoding here
- * would double-encode and break parsing: the raw JSON is the canonical wire
- * format. Client scripts read the encoded value from `document.cookie` and
- * decode it via `parseCartForDisplay`.
- */
-export function serializeCart(items: CartItem[], now: number = Date.now()): string {
-  const payload: CartPayload = {
-    v: CART_PAYLOAD_VERSION,
-    items: items.map((item) => ({ ...item })),
-    exp: Math.floor(now / 1000) + CART_MAX_AGE_SECONDS,
-  };
-  const body = JSON.stringify({ ...payload, sig: signPayload(payload) });
-  return body;
-}
-
-/**
- * Server-side read: verify the signature and expiry, sanitize items, and
- * classify the cart. An unreadable, unsigned, tampered, or expired cookie
- * returns `expired` (the cart page communicates and clears it); a missing
- * cookie returns `empty`. Next.js percent-decodes cookie values before this.
- */
-export function parseCart(value: string | null | undefined, now: number = Date.now()): CartState {
-  if (!value) return EMPTY_CART;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return { status: 'expired', items: [] };
-  }
-  if (typeof parsed !== 'object' || parsed === null) {
-    return { status: 'expired', items: [] };
-  }
-  const body = parsed as Record<string, unknown>;
-  if (
-    body.v !== CART_PAYLOAD_VERSION ||
-    !Array.isArray(body.items) ||
-    typeof body.exp !== 'number' ||
-    typeof body.sig !== 'string'
-  ) {
-    return { status: 'expired', items: [] };
-  }
-  const payload: CartPayload = { v: CART_PAYLOAD_VERSION, items: body.items, exp: body.exp };
-  if (!verifyPayload(payload, body.sig)) {
-    return { status: 'expired', items: [] };
-  }
-  const items = payload.items.filter(isCartItem);
-  if (payload.exp <= Math.floor(now / 1000)) {
-    return { status: 'expired', items: [] };
-  }
-  return items.length > 0 ? { status: 'ok', items } : EMPTY_CART;
-}
-
-/** Read the cart from a raw `Cookie` request header (legacy signature kept
- * for compatibility; Next.js callers already receive decoded values). */
-export function readCartCookie(cookieHeader: string | null | undefined): CartState {
-  if (!cookieHeader) return EMPTY_CART;
-  const match = cookieHeader
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${CART_COOKIE}=`));
-  if (!match) return EMPTY_CART;
-  const raw = match.slice(CART_COOKIE.length + 1);
-  try {
-    return parseCart(decodeURIComponent(raw));
-  } catch {
-    return { status: 'expired', items: [] };
-  }
-}
+// ---------------------------------------------------------------------------
+// Display-only client parsing (header badge)
+// ---------------------------------------------------------------------------
+//
+// The badge reads the signed cookie WITHOUT verifying it — presentation only,
+// and the server is authoritative on every cart render and mutation. These
+// functions are the only ones client components import from this module, so
+// the browser bundle never references `node:crypto`.
 
 /**
  * Client-side display read for the header badge: extracts the `shanyin_cart`

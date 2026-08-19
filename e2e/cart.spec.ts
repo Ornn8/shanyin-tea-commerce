@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { serializeCart, type CartItem } from '../src/lib/cart';
+import { serializeCart } from '../src/lib/cart-signing';
+import type { CartItem } from '../src/lib/cart';
 import { LOCALE_IDS, type LocaleId } from '../src/i18n/registry';
 import {
   CART_SKU_LONGNAME,

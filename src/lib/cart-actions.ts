@@ -13,11 +13,10 @@ import { cookies } from 'next/headers';
 import {
   CART_COOKIE,
   CART_MAX_AGE_SECONDS,
-  parseCart,
-  serializeCart,
   type CartItem,
   type CartState,
 } from '@/lib/cart';
+import { parseCart, serializeCart } from '@/lib/cart-signing';
 import {
   addToCartService,
   emptyCartService,
@@ -119,10 +118,27 @@ export interface CartReconcileResult {
  * persistence already matches the revalidated state, so it is safe to call on
  * every cart view. All writes go through this server action (Next.js disallows
  * cookie mutation during a Server Component render).
+ *
+ * The write is compare-and-set guarded: the cart page passes the exact decoded
+ * cookie value this render was built from (`expectedCookieValue`); if the
+ * cookie has since been rewritten by a user mutation (or another tab), the
+ * action skips the write and reports no change, so a background reconcile can
+ * never clobber a newer mutation — it cannot resurrect a removed item or undo
+ * a new quantity. The cart shell additionally only calls this action when the
+ * render actually surfaced something to persist (expired/void, dropped line,
+ * or a stock clamp), so an untouched render issues no competing write at all.
  */
-export async function reconcileCartAction(): Promise<CartReconcileResult> {
+export async function reconcileCartAction(
+  expectedCookieValue?: string | null,
+): Promise<CartReconcileResult> {
   const store = await cookies();
-  const parsed = parseCart(store.get(CART_COOKIE)?.value);
+  const currentValue = store.get(CART_COOKIE)?.value;
+  // Guarded write: only reconcile-and-persist when nothing changed the cookie
+  // since the dispatching render read it. A newer state always wins.
+  if (currentValue !== expectedCookieValue) {
+    return { ok: true, changed: false };
+  }
+  const parsed = parseCart(currentValue);
   const reconciled = await reconcileCartState(parsed);
   const currentItems: CartItem[] = parsed.status === 'ok' ? parsed.items : [];
   const changed =

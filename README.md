@@ -91,7 +91,10 @@ communicates expired, removed, price-changed, and insufficient-stock states in a
 locales. Each cart view also persists what the page just revalidated: an expired or void cookie
 is cleared, unpublished lines are pruned, and quantities are clamped to current stock, so stale
 state cannot linger in the header badge or reappear after re-publication or a stock restore.
-See [ADR-0007](./docs/adr/0007-anonymous-cart-and-shipping-estimate.md).
+The signing boundary is server-only (`src/lib/cart-signing.ts`), so `node:crypto` never enters
+the browser bundle, and the persistence write is gated + compare-and-set guarded so a background
+reconcile can never fight a newer user mutation. See
+[ADR-0007](./docs/adr/0007-anonymous-cart-and-shipping-estimate.md).
 
 ## Scripts
 
