@@ -14,13 +14,13 @@ permissions:
 
 jobs:
   observe:
-    uses: Ornn8/dsh-agent-automation/.github/workflows/observe-agent-fault.yml@3ad9ba7c8f78da3d48e20381aae6c0c369f95d24
+    uses: Ornn8/dsh-agent-automation/.github/workflows/observe-agent-fault.yml@8c17a3012560093b8afae08e128ef29cf3f1256f
     with:
       source_run_id: ${{ github.event.workflow_run.id }}
 
   recover:
     needs: observe
     if: always()
-    uses: Ornn8/dsh-agent-automation/.github/workflows/recover-backlog.yml@3ad9ba7c8f78da3d48e20381aae6c0c369f95d24
+    uses: Ornn8/dsh-agent-automation/.github/workflows/recover-backlog.yml@8c17a3012560093b8afae08e128ef29cf3f1256f
     with:
       source_run_id: ${{ github.event.workflow_run.id }}
