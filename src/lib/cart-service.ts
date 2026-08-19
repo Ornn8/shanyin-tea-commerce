@@ -100,12 +100,30 @@ export async function addToCartService(
   const currentLine = state.status === 'ok' ? state.items.find((item) => item.sku === sku) : undefined;
   const current = currentLine?.qty ?? 0;
   const resultQty = Math.min(current + requested, live.inventory, CART_MAX_QTY);
-  if (resultQty <= current) {
-    // Everything is already in the cart (or stock dropped below it): keep the
-    // line but clamp to the current inventory.
-    return { ok: true, state: setItemQuantity(state, sku, resultQty) };
+  if (resultQty > current) {
+    // The addition grew the line (possibly capped partially by remaining
+    // inventory, e.g. 8 + 6 against stock 10 lands at 10): a genuine add.
+    return { ok: true, state: addItem(state, sku, resultQty - current, live.priceCents) };
   }
-  return { ok: true, state: addItem(state, sku, resultQty - current, live.priceCents) };
+  // The requested addition could not increase the line at all: either the
+  // line already holds every unit in stock (or stock dropped below the
+  // running quantity), or the per-line maximum is reached. Reporting ok
+  // here would be a false "Added" — AddToCart maps every ok result to the
+  // added state even though nothing was added (and a clamp-down would
+  // silently shrink the cart). Communicate the shortage instead. The cart
+  // view's reconciliation is what finally persists an over-stock clamp.
+  if (live.inventory <= current) {
+    return {
+      ok: false,
+      code: 'insufficient-stock',
+      message: `Variant "${sku}" has only ${live.inventory} in stock; the requested quantity could not be added.`,
+    };
+  }
+  return {
+    ok: false,
+    code: 'invalid-input',
+    message: `Variant "${sku}" is already at the per-line maximum of ${CART_MAX_QTY}; nothing more can be added.`,
+  };
 }
 
 /** Replace a line's quantity. Quantity 0 (or below) removes the line; an

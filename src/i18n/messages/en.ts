@@ -80,6 +80,7 @@ const enMessages = {
   'cart.shippingFreeNote': 'Free shipping on orders over {amount}.',
   'cart.estimatedTotal': 'Estimated total',
   'cart.addError': 'Could not add this item to your cart.',
+  'cart.addInsufficientStock': 'Only the in-stock quantity is available - nothing more could be added.',
   'cart.updateError': 'Could not update this item.',
   'catalog.filterTitle': 'Refine results',
   'catalog.queryLabel': 'Search',

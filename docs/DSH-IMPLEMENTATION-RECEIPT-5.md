@@ -271,3 +271,34 @@ Verification (CI-equivalent locally on Node 22, matching Node 24 results):
 - `pnpm build` — passes.
 - `pnpm e2e` — passes (2 projects), including the new serialization regression
   and the existing reconciliation / revalidation journeys.
+
+## Review repair (review of exact head `deff2245dacf069c9980f690ac797d0d2a29b05e`)
+
+- **Finding:** `[P1] Stock capped additions are reported as successful`
+  (`src/lib/cart-service.ts`). When the cart already holds more than the live
+  inventory (e.g. qty 5 against stock 2), `addToCartService` wrote the clamped
+  quantity (2) while returning `ok:true`, and `AddToCart` mapped every `ok`
+  result to the "Added" state — an add request could reduce the cart or do
+  nothing while falsely reporting success instead of communicating
+  insufficient stock.
+- **Fix (`src/lib/cart-service.ts`):** an `addToCartService` that cannot grow
+  the line (the line already holds the available stock, or stock dropped
+  below the running quantity) now returns `insufficient-stock` (or
+  `invalid-input` at the per-line `CART_MAX_QTY` bound) instead of `ok:true`.
+  A stock-capped add no longer silently rewrites the cookie down to the
+  clamp; it reports the shortage.
+- **UI (`src/components/add-to-cart.tsx`, `src/components/product-purchase.tsx`):**
+  `AddToCart` distinguishes the new `insufficient-stock` code and surfaces the
+  localized `cart.addInsufficientStock` copy instead of the generic error or
+  a false "Added" (new keys in `en`/`zh-CN`/`ja`).
+- **Tests:** new integration test (`tests/integration/cart.test.ts`) asserting
+  a stock-capped add returns `insufficient-stock` (line at stock and line over
+  stock); new e2e journey `stock-capped add reports the shortage instead of a
+  false success` (`e2e/cart.spec.ts`) asserting the button copy, an unchanged
+  badge/cookie after the rejected add, and the clamp still persisted by the
+  cart page reconciliation.
+- **Docs:** ADR-0007, README, and SETUP.md updated to state that an add that
+  cannot grow the line reports the shortage rather than a false success.
+- **Verification (CI-equivalent locally):** `pnpm i18n:check`, `pnpm lint`,
+  `pnpm typecheck`, `pnpm test` (156 tests, +1), `pnpm build`, and `pnpm e2e`
+  (102 tests, +2 projects × 1 journey) all pass.

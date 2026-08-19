@@ -77,6 +77,7 @@ export const ja = {
   'cart.shippingFreeNote': '{amount} 以上で送料無料。',
   'cart.estimatedTotal': '合計（見積）',
   'cart.addError': 'この商品をカートに入れられませんでした。',
+  'cart.addInsufficientStock': '在庫分までしか追加できません。これ以上は追加できません。',
   'cart.updateError': 'この商品を更新できませんでした。',
   'catalog.filterTitle': '結果を絞り込む',
   'catalog.queryLabel': '検索',

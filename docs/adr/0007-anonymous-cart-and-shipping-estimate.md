@@ -59,7 +59,13 @@ blocking).
 stock 10 lands at 10), a quantity update clamps to the current inventory, and
 stale lines whose product was unpublished or removed are pruned before any
 write (`pruneStaleState`). Nothing in the cart can ever claim more stock than
-the shared fact holds at the moment of the last validated write.
+the shared fact holds at the moment of the last validated write. An "add
+to cart" that cannot grow the line — the cart already holds the available
+stock, or stock dropped below the running quantity — reports
+`insufficient-stock` (localized `cart.addInsufficientStock` on the button)
+instead of a false success, and does not silently rewrite the cookie down to
+the clamp; the clamp itself is persisted by the cart view's reconciliation
+(see below).
 
 **The page re-resolves on every render, and the revalidated state is
 persisted.** `resolveCartItems` (`src/lib/products.ts`) is called on every cart

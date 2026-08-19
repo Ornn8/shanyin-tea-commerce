@@ -85,7 +85,8 @@ The anonymous cart (`/…/cart`) persists across refreshes and locale switches i
 HMAC-signed cookie holding only language-neutral data (SKU, quantity, price snapshot), so
 switching locale changes presentation only — never duplicating or dropping lines. Every
 quantity change is a server action that re-validates publication state, current price, and
-stock (quantities stay bounded and never exceed stock; prices are never client-supplied). The
+stock (quantities stay bounded and never exceed stock; prices are never client-supplied; an
+add that cannot grow the line reports the shortage instead of a false "Added"). The
 cart shows the subtotal and a clearly labeled non-binding shipping estimate in CNY, and
 communicates expired, removed, price-changed, and insufficient-stock states in all three
 locales. Each cart view also persists what the page just revalidated: an expired or void cookie

@@ -61,6 +61,9 @@ const QTY_WORD: Record<LocaleId, string> = {
   ja: '数量',
 };
 
+/** English copy the add button shows when an add cannot grow the line. */
+const ADD_INSUFFICIENT_EN = 'Only the in-stock quantity is available - nothing more could be added.';
+
 function assertNoHorizontalOverflow(page: import('@playwright/test').Page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -399,6 +402,37 @@ test.describe('cart — full add-to-cart journey per locale', () => {
     } finally {
       await page.context().unroute('**/*');
       await pageB.close();
+    }
+  });
+
+  test('stock-capped add reports the shortage instead of a false success', async ({ page }) => {
+    // A cart that already holds more than the live stock (qty 5) attempts one
+    // more add after inventory drops to 2. The add cannot grow the line, so it
+    // must surface the localized stock message — never a false "Added" — and
+    // must not silently rewrite the cookie down to the clamp.
+    const overStock: CartItem = { sku: CART_SKU_REVALIDATE, qty: 5, priceCents: 15000, addedAt: 1 };
+    await page.context().addCookies([
+      { name: 'shanyin_cart', value: serializeCart([overStock]), url: BASE_URL },
+    ]);
+    await page.goto('/en/products/e2e-cart-revalidate');
+    await expect(page.getByTestId('cart-count')).toHaveText('5');
+
+    try {
+      await setVariantInventory(CART_SKU_REVALIDATE, 2);
+      await page.reload();
+      await page.getByTestId('add-to-cart').click();
+      // The button reports the stock shortage; it does not flip to "Added".
+      await expect(page.getByTestId('add-to-cart')).toContainText(ADD_INSUFFICIENT_EN);
+      await expect(page.getByTestId('add-to-cart')).not.toContainText('Added');
+      // No false increment, and no silent clamp-down write from the failed add.
+      await expect(page.getByTestId('cart-count')).toHaveText('5');
+      expect((await cartCookieItems(page)).find((line) => line.sku === CART_SKU_REVALIDATE)?.qty).toBe(5);
+      // The persisted clamp still happens on the cart page (reconciliation).
+      await page.goto('/en/cart');
+      await expect(page.getByTestId(`cart-insufficient-stock-${CART_SKU_REVALIDATE}`)).toBeVisible();
+      await expect(page.getByTestId(`cart-qty-${CART_SKU_REVALIDATE}`)).toHaveText('2');
+    } finally {
+      await setVariantInventory(CART_SKU_REVALIDATE, 10);
     }
   });
 

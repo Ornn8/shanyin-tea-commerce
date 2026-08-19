@@ -114,6 +114,7 @@ export default async function ProductPage({ params }: ProductPageProps) {
             addToCart: t('product.addToCart'),
             addedToCart: t('product.addedToCart'),
             addError: t('cart.addError'),
+            addInsufficientStock: t('cart.addInsufficientStock'),
             demoBadge: t('common.demoBadge'),
           }}
         />

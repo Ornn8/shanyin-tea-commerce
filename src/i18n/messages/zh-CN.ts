@@ -78,6 +78,7 @@ export const zhCN = {
   'cart.shippingFreeNote': '满 {amount} 免运费。',
   'cart.estimatedTotal': '预计合计',
   'cart.addError': '无法将该商品加入购物袋。',
+  'cart.addInsufficientStock': '仅剩的库存数量可加入，无法再加更多。',
   'cart.updateError': '无法更新该商品。',
   'catalog.filterTitle': '细化结果',
   'catalog.queryLabel': '搜索',

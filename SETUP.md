@@ -121,10 +121,12 @@ unavailable defaults, invalid slugs, locale switching, structured data, and acce
 the same two viewports, and the cart journeys (`e2e/cart.spec.ts`) cover one full add-to-cart
 path per locale (quantities, subtotal, the non-binding shipping estimate, recovery across
 refresh and locale switch), server revalidation (concurrent stock change, price change,
-unpublish removal), the expired-cart notice, and keyboard/live-region/focus behavior with long
-labels (Issue #5, ADR-0007). The cart unit suite (`tests/unit/cart.test.ts`) covers the signed
-cookie model (tamper/expiry) and shipping boundaries; `tests/integration/cart.test.ts` covers
-revalidation and the bounded, atomic service mutations.
+unpublish removal), a stock-capped add reporting the shortage instead of a false success, the
+expired-cart notice, and keyboard/live-region/focus behavior with long labels (Issue #5,
+ADR-0007). The cart unit suite (`tests/unit/cart.test.ts`) covers the signed cookie model
+(tamper/expiry) and shipping boundaries; `tests/integration/cart.test.ts` covers revalidation
+and the bounded, atomic service mutations — including an add that cannot grow the line
+reporting `insufficient-stock` rather than a false success.
 
 Playwright writes screenshots to `e2e/screenshots/<project>/<locale>-*.png` and, in CI, a
 `commit.txt` with the exact tested commit. Artifacts are uploaded by the `CI` workflow

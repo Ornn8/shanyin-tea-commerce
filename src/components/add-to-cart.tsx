@@ -10,6 +10,12 @@ interface AddToCartProps {
   addedLabel: string;
   /** Localized error shown when the server rejects the add (e.g. out of stock). */
   errorLabel: string;
+  /**
+   * Localized message shown when the add was blocked by insufficient stock —
+   * the requested addition could not grow the line (the line already holds
+   * every unit in stock, or stock dropped below the running quantity).
+   */
+  insufficientStockLabel: string;
   disabled?: boolean;
 }
 
@@ -20,15 +26,27 @@ interface AddToCartProps {
  * server — the client never serializes or signs the cart. The header badge is
  * kept in sync via the `shanyin:cart` event.
  *
+ * An ok result means the line actually grew; if the server reports
+ * `insufficient-stock` (nothing could be added because the cart already holds
+ * the available stock), the button surfaces the localized stock message rather
+ * than a false "Added".
+ *
  * The mutation runs under the storefront-wide cart write lock
  * (`withCartLock`), so a concurrent add from ANOTHER tab cannot be silently
  * overwritten: the lock serializes every cart read-modify-write round trip
  * across all same-origin tabs, and the server action always re-reads the
  * latest committed cookie before writing (ADR-0007).
  */
-export function AddToCart({ sku, label, addedLabel, errorLabel, disabled = false }: AddToCartProps) {
+export function AddToCart({
+  sku,
+  label,
+  addedLabel,
+  errorLabel,
+  insufficientStockLabel,
+  disabled = false,
+}: AddToCartProps) {
   const [pending, startTransition] = useTransition();
-  const [state, setState] = useState<'idle' | 'added' | 'error'>('idle');
+  const [state, setState] = useState<'idle' | 'added' | 'error' | 'insufficient-stock'>('idle');
 
   function handleAdd() {
     if (pending) return;
@@ -40,7 +58,9 @@ export function AddToCart({ sku, label, addedLabel, errorLabel, disabled = false
           window.dispatchEvent(new Event('shanyin:cart'));
           window.setTimeout(() => setState('idle'), 1600);
         } else {
-          setState('error');
+          setState(
+            result.code === 'insufficient-stock' ? 'insufficient-stock' : 'error',
+          );
           window.setTimeout(() => setState('idle'), 2000);
         }
       } catch {
@@ -52,7 +72,13 @@ export function AddToCart({ sku, label, addedLabel, errorLabel, disabled = false
 
   const disabledNow = disabled || pending;
   const message =
-    state === 'added' ? addedLabel : state === 'error' ? errorLabel : label;
+    state === 'added'
+      ? addedLabel
+      : state === 'insufficient-stock'
+        ? insufficientStockLabel
+        : state === 'error'
+          ? errorLabel
+          : label;
 
   return (
     <button

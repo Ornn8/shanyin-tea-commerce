@@ -257,6 +257,29 @@ describeDb('cart (ADR-0007)', () => {
       expect(tooHigh.ok).toBe(false);
     });
 
+    it('reports insufficient-stock when an add cannot grow the line instead of a false success', async () => {
+      // The line already holds the entire live inventory (3): adding 1 cannot
+      // grow it, so the add must report the shortage, not ok:true (which
+      // AddToCart maps to the "Added" state).
+      const atStock = await addToCartService(EMPTY_CART, SKU_LOW, 3);
+      if (!atStock.ok) throw new Error('add failed');
+      expect(atStock.ok).toBe(true);
+      const blocked = await addToCartService(atStock.state, SKU_LOW, 1);
+      expect(blocked.ok).toBe(false);
+      if (!blocked.ok) expect(blocked.code).toBe('insufficient-stock');
+
+      // Stock dropped below the running quantity (cart holds 5 of a 3-stock
+      // variant): the add must report insufficient-stock instead of writing a
+      // clamp-down quantity while claiming success.
+      const overStock = {
+        status: 'ok' as const,
+        items: [item(SKU_LOW, 5, 7500)],
+      };
+      const dropped = await addToCartService(overStock, SKU_LOW, 1);
+      expect(dropped.ok).toBe(false);
+      if (!dropped.ok) expect(dropped.code).toBe('insufficient-stock');
+    });
+
     it('removes a line by SKU', async () => {
       const created = await addToCartService(EMPTY_CART, SKU_IN_STOCK, 1);
       if (!created.ok) throw new Error('add failed');

@@ -29,6 +29,8 @@ export interface PurchaseStrings {
   addedToCart: string;
   /** Shown when the server rejects the add (e.g. stock changed underneath). */
   addError: string;
+  /** Shown when the add was blocked because the cart already holds the available stock. */
+  addInsufficientStock: string;
   /** Short "Demo" badge label for the media panel. */
   demoBadge: string;
 }
@@ -180,6 +182,7 @@ export function ProductPurchase({
               label={strings.addToCart}
               addedLabel={strings.addedToCart}
               errorLabel={strings.addError}
+              insufficientStockLabel={strings.addInsufficientStock}
               disabled={!inStock}
             />
           </div>
