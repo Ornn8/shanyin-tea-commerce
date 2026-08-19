@@ -52,14 +52,27 @@ stale lines whose product was unpublished or removed are pruned before any
 write (`pruneStaleState`). Nothing in the cart can ever claim more stock than
 the shared fact holds at the moment of the last validated write.
 
-**The page re-resolves on every render.** `resolveCartItems`
-(`src/lib/products.ts`) is called on every cart render: lines whose product is
-unpublished/unknown are dropped and announced in localized copy; a line whose
-stored quantity exceeds the live inventory is clamped (`effectiveQty`) and
-flagged; a line whose snapshot price differs from the live price is flagged.
-Cookie order is preserved and copy is picked per locale (ADR-0003), so
-locale switching is presentation only — lines are never duplicated or
-dropped by locale and SKU identity is stable.
+**The page re-resolves on every render, and the revalidated state is
+persisted.** `resolveCartItems` (`src/lib/products.ts`) is called on every cart
+render: lines whose product is unpublished/unknown are dropped and announced
+in localized copy; a line whose stored quantity exceeds the live inventory is
+clamped (`effectiveQty`) and flagged; a line whose snapshot price differs from
+the live price is flagged. Cookie order is preserved and copy is picked per
+locale (ADR-0003), so locale switching is presentation only — lines are never
+duplicated or dropped by locale and SKU identity is stable.
+
+On each cart view, the client shell calls a `reconcileCartAction` server
+action (`src/lib/cart-actions.ts`) that persists exactly what the page just
+revalidated (`reconcileCartState` in `src/lib/cart-service.ts`): an expired,
+void, or empty cookie is **deleted** (no longer merely hidden); unpublished or
+unknown lines are pruned from the cookie so they cannot reappear after
+re-publication; and each surviving line's stored quantity is clamped to the
+current shared inventory so a shortage the page reported never silently jumps
+back when stock is restored. A line whose variant is out of stock (0) cannot
+honestly hold a quantity, so it is dropped. The action is idempotent — a
+cookie that already matches is left untouched, so it is safe to run on every
+view. Cookie mutation is a Server Action in Next.js, so this persistence is
+deliberately not done during the render itself.
 
 **Subtotal + clearly labeled non-binding shipping estimate.** Totals use
 revalidated prices and effective quantities in integer CNY cents. The shipping
@@ -87,15 +100,20 @@ native per-character breaking), so a Japanese long name never overflows the
   the full cookie lifetime. Recorded, not blocking: a future checkout can
   migrate the signed cookie into a server-side cart in a transaction.
 - Tampering or staleness is degraded gracefully (localized "expired" notice),
-  never displayed. The client badge may briefly count a line whose product was
-  unpublished until the next mutation prunes it (the cart page already shows
-  the removal notice) — recorded, not blocking.
+  never displayed, and the cleanup is persisted: the cart view deletes the
+  void/expired cookie and the badge treats such a cookie as empty, so the
+  stale count does not survive reloads.
 - Two secrets now exist (`AUTH_SECRET` for sessions, `CART_SECRET` for carts),
   documented in `.env.example`/`SETUP.md` and set in CI; production must
   rotate both independently.
 - The previous demo cart (a plain array of SKUs) is superseded: legacy
-  unsigned cookies read back as expired and are cleared, which is
-  communicated in localized copy.
+  unsigned cookies read back as expired and are cleared (deleted on the next
+  cart view), which is communicated in localized copy.
+- The header badge is client-side and reads the cookie WITHOUT verification,
+  but it honors the readable envelope: an expired or void cookie counts as
+  empty, so the badge never contradicts the page's "cleared" state. The badge
+  may still briefly count a line whose product was unpublished until a cart
+  view or mutation prunes it — recorded, not blocking.
 - New unit/integration suites (`tests/unit/cart.test.ts`,
   `tests/integration/cart.test.ts`) and a Playwright spec
   (`e2e/cart.spec.ts`) cover the signed model, all localized states, the

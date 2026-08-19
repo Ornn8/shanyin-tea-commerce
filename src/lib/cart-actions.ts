@@ -22,10 +22,27 @@ import {
   addToCartService,
   emptyCartService,
   pruneStaleState,
+  reconcileCartState,
   removeCartItemService,
   setCartItemQuantityService,
   type CartMutationResult,
 } from '@/lib/cart-service';
+
+/** True when every field of two item lists is identical (order matters). */
+function sameItems(a: CartItem[], b: CartItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].sku !== b[i].sku ||
+      a[i].qty !== b[i].qty ||
+      a[i].priceCents !== b[i].priceCents ||
+      a[i].addedAt !== b[i].addedAt
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export type CartActionResult = CartMutationResult;
 
@@ -84,4 +101,42 @@ export async function emptyCartAction(): Promise<CartActionResult> {
     await writeState(result.state);
   }
   return result;
+}
+
+export interface CartReconcileResult {
+  ok: true;
+  /** True when the cookie was rewritten or cleared because the read state
+   * differed from the persisted state (expired/void, pruned, or clamped). */
+  changed: boolean;
+}
+
+/**
+ * Persist the cart state the page already revalidated (ADR-0007): clears an
+ * expired, tampered, or void cookie, prunes unpublished/unknown lines, and
+ * clamps remaining quantities to the CURRENT inventory — so the signed cookie
+ * never retains state the storefront reported as cleared, and revealed
+ * shortages cannot reappear after stock is restored. It is a no-op when the
+ * persistence already matches the revalidated state, so it is safe to call on
+ * every cart view. All writes go through this server action (Next.js disallows
+ * cookie mutation during a Server Component render).
+ */
+export async function reconcileCartAction(): Promise<CartReconcileResult> {
+  const store = await cookies();
+  const parsed = parseCart(store.get(CART_COOKIE)?.value);
+  const reconciled = await reconcileCartState(parsed);
+  const currentItems: CartItem[] = parsed.status === 'ok' ? parsed.items : [];
+  const changed =
+    parsed.status !== reconciled.status || !sameItems(currentItems, reconciled.items);
+  if (changed) {
+    if (reconciled.items.length === 0) {
+      store.delete(CART_COOKIE);
+    } else {
+      store.set(CART_COOKIE, serializeCart(reconciled.items), {
+        path: '/',
+        maxAge: CART_MAX_AGE_SECONDS,
+        sameSite: 'lax',
+      });
+    }
+  }
+  return { ok: true, changed };
 }

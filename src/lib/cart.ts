@@ -201,21 +201,33 @@ export function readCartCookie(cookieHeader: string | null | undefined): CartSta
  * verification — the count is presentation only and the server is
  * authoritative. Decoding is lenient: an already-raw (unencoded) value passes
  * through unchanged.
+ *
+ * The badge must never contradict the storefront's state: a cookie the server
+ * classifies as expired or void (missing version, signature, or expiry) is
+ * treated as empty here too, so an expired cart being reported as cleared on
+ * the cart page is not shown as a stale count elsewhere on every reload.
  */
-export function readCartForDisplay(documentCookie: string): CartItem[] {
+export function readCartForDisplay(documentCookie: string, now: number = Date.now()): CartItem[] {
   const part = documentCookie
     .split(';')
     .map((entry) => entry.trim())
     .find((entry) => entry.startsWith(`${CART_COOKIE}=`));
   if (!part) return [];
-  return parseCartForDisplay(part.slice(CART_COOKIE.length + 1));
+  return parseCartForDisplay(part.slice(CART_COOKIE.length + 1), now);
 }
 
 /**
- * Decode and parse a raw (percent-encoded) cart cookie VALUE. The signature is
- * NOT verified here — the count is for display only.
+ * Decode and parse a raw (percent-encoded) cart cookie VALUE for the header
+ * badge. The signature is NOT verified here — the count is display-only and
+ * the server is authoritative. But the readable envelope (version, presence
+ * of a signature, and the expiry) IS honored, so an expired or void payload
+ * reads as empty rather than as a stale count (a signed, unexpired payload
+ * always carries those fields).
  */
-export function parseCartForDisplay(rawEncoded: string | undefined | null): CartItem[] {
+export function parseCartForDisplay(
+  rawEncoded: string | undefined | null,
+  now: number = Date.now(),
+): CartItem[] {
   if (!rawEncoded) return [];
   let body: unknown = null;
   try {
@@ -223,11 +235,20 @@ export function parseCartForDisplay(rawEncoded: string | undefined | null): Cart
   } catch {
     return [];
   }
-  if (typeof body !== 'object' || body === null || !Array.isArray((body as { items?: unknown }).items)) {
+  if (typeof body !== 'object' || body === null) return [];
+  const record = body as { v?: unknown; sig?: unknown; exp?: unknown; items?: unknown };
+  if (
+    record.v !== CART_PAYLOAD_VERSION ||
+    typeof record.sig !== 'string' ||
+    record.sig.length === 0 ||
+    typeof record.exp !== 'number' ||
+    !Array.isArray(record.items)
+  ) {
     return [];
   }
-  const items = (body as { items: unknown[] }).items;
-  return items.filter(isCartItem);
+  // A payload the server would classify as expired must not count either.
+  if (record.exp <= Math.floor(now / 1000)) return [];
+  return record.items.filter(isCartItem);
 }
 
 // ---------------------------------------------------------------------------

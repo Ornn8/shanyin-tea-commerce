@@ -21,6 +21,7 @@ import { resolveCartItems } from '@/lib/products';
 import {
   addToCartService,
   pruneStaleState,
+  reconcileCartState,
   removeCartItemService,
   setCartItemQuantityService,
 } from '@/lib/cart-service';
@@ -285,6 +286,59 @@ describeDb('cart (ADR-0007)', () => {
         items: [item(SKU_UNPUBLISHED, 1, 9000), item('SHY-VANISHED', 1, 1000)],
       });
       expect(allStale).toEqual(EMPTY_CART);
+    });
+  });
+
+  describe('reconcileCartState (persist cleared + revalidated state)', () => {
+    it('clears an expired, void, or empty cart', async () => {
+      expect(await reconcileCartState({ status: 'expired', items: [] })).toEqual(EMPTY_CART);
+      expect(await reconcileCartState(EMPTY_CART)).toEqual(EMPTY_CART);
+    });
+
+    it('prunes unpublished/unknown lines and clamps over-stock quantities', async () => {
+      const reconciled = await reconcileCartState({
+        status: 'ok',
+        items: [
+          item(SKU_IN_STOCK, 12, 15000), // clamped to live inventory 10
+          item(SKU_LOW, 5, 7500), // clamped to live inventory 3
+          item(SKU_UNPUBLISHED, 1, 9000), // unpublished → dropped
+          item('SHY-VANISHED', 1, 1000), // unknown → dropped
+        ],
+      });
+      expect(reconciled.status).toBe('ok');
+      expect(reconciled.items.map((entry) => [entry.sku, entry.qty])).toEqual([
+        [SKU_IN_STOCK, 10],
+        [SKU_LOW, 3],
+      ]);
+      // Identity (snapshot price, add time) is preserved through clamping.
+      expect(reconciled.items[0].priceCents).toBe(15000);
+      expect(reconciled.items[1].priceCents).toBe(7500);
+    });
+
+    it('drops an out-of-stock line (it cannot honestly hold a quantity)', async () => {
+      const reconciled = await reconcileCartState({
+        status: 'ok',
+        items: [item(SKU_OUT, 1, 30000)],
+      });
+      expect(reconciled).toEqual(EMPTY_CART);
+    });
+
+    it('leaves a fully valid cart unchanged', async () => {
+      const source = {
+        status: 'ok' as const,
+        items: [item(SKU_IN_STOCK, 2, 15000), item(SKU_LOW, 1, 7500)],
+      };
+      const reconciled = await reconcileCartState(source);
+      expect(reconciled).toEqual(source);
+    });
+
+    it('returns the empty cart when every line is stale', async () => {
+      expect(
+        await reconcileCartState({
+          status: 'ok',
+          items: [item(SKU_UNPUBLISHED, 1, 9000), item(SKU_OUT, 1, 30000)],
+        }),
+      ).toEqual(EMPTY_CART);
     });
   });
 });

@@ -2,13 +2,18 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useRef, useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { createT } from '@/i18n/catalog';
 import { formatCny } from '@/i18n/format';
 import type { LocaleId } from '@/i18n/registry';
 import { CART_MAX_QTY } from '@/lib/cart';
 import { SHIPPING_FREE_THRESHOLD_CENTS } from '@/lib/shipping-estimate';
-import { emptyCartAction, removeCartItemAction, setCartItemQuantityAction } from '@/lib/cart-actions';
+import {
+  emptyCartAction,
+  reconcileCartAction,
+  removeCartItemAction,
+  setCartItemQuantityAction,
+} from '@/lib/cart-actions';
 import type { CartLineIssue } from '@/lib/products';
 
 /** Serializable line data resolved on the server (ADR-0007). */
@@ -69,6 +74,32 @@ export function CartShell({
   const [announce, setAnnounce] = useState<{ id: number; text: string } | null>(null);
 
   const empty = lines.length === 0;
+
+  // Persist the revalidated cart state this page just surfaced (ADR-0007):
+  // clear an expired/void cookie, prune unpublished/unknown lines, and clamp
+  // quantities to the current inventory — so the header badge cannot keep
+  // showing a stale count and revealed shortages cannot reappear after stock
+  // is restored. Idempotent: a cookie that already matches is left untouched.
+  // There is deliberately no router.refresh() here so the localized
+  // expired/removed notices the server rendered stay visible; the badge is
+  // synced via the `shanyin:cart` event instead.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await reconcileCartAction();
+        if (!cancelled && result.ok && result.changed) {
+          window.dispatchEvent(new Event('shanyin:cart'));
+        }
+      } catch {
+        // Display-only recovery; a transient failure just leaves the stale
+        // cookie for the next cart view or mutation.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function notify(text: string) {
     setAnnounce((prev) => ({ id: (prev?.id ?? 0) + 1, text }));

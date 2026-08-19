@@ -17,7 +17,15 @@
  * of Next.js imports so it is integration-testable directly.
  */
 import { prisma } from '@/lib/prisma';
-import { CART_MAX_QTY, type CartState, addItem, removeItem, setItemQuantity } from '@/lib/cart';
+import {
+  CART_MAX_QTY,
+  EMPTY_CART,
+  type CartItem,
+  type CartState,
+  addItem,
+  removeItem,
+  setItemQuantity,
+} from '@/lib/cart';
 
 export type CartMutationCode = 'unavailable' | 'insufficient-stock' | 'invalid-input';
 
@@ -163,4 +171,43 @@ export async function pruneStaleState(state: CartState): Promise<CartState> {
   const live = new Set(rows.map((row) => row.sku));
   const items = state.items.filter((item) => live.has(item.sku));
   return items.length > 0 ? { status: 'ok', items } : { status: 'empty', items: [] };
+}
+
+/**
+ * The durable cart state the storefront should PERSIST after a read, so the
+ * signed cookie never retains what the cart page has already declared
+ * cleared or revalidated (ADR-0007):
+ *
+ *  - an expired, void, or empty cart reconciles to the empty cart (cleared);
+ *  - lines whose product is unpublished or whose SKU is unknown are dropped,
+ *    so they cannot reappear if the product is later re-published;
+ *  - each remaining line's quantity is clamped to the CURRENT shared
+ *    inventory, so a stock shortage the page reported never silently jumps
+ *    back when stock is restored — the cart converges to a valid state;
+ *  - a line whose variant is out of stock (inventory 0) cannot honestly hold
+ *    any quantity, so it is dropped rather than stored as a claim of stock
+ *    that does not exist.
+ *
+ * Order of surviving lines follows the cookie and sku/priceCents/addedAt
+ * identity is preserved. This module is database-bound but Next.js-free so it
+ * is integration-testable directly.
+ */
+export async function reconcileCartState(state: CartState): Promise<CartState> {
+  if (state.status !== 'ok' || state.items.length === 0) return EMPTY_CART;
+  const skus = state.items.map((item) => item.sku);
+  // One query: published-only variants with their live inventory.
+  const rows = await prisma.productVariant.findMany({
+    where: { sku: { in: skus }, product: { published: true } },
+    select: { sku: true, inventory: true },
+  });
+  const live = new Map(rows.map((row) => [row.sku, row.inventory]));
+  const items: CartItem[] = [];
+  for (const item of state.items) {
+    const stock = live.get(item.sku);
+    // Unpublished, unknown, or out-of-stock (0) variants cannot persist.
+    if (stock === undefined || stock <= 0) continue;
+    const qty = Math.min(item.qty, stock);
+    items.push({ sku: item.sku, qty, priceCents: item.priceCents, addedAt: item.addedAt });
+  }
+  return items.length > 0 ? { status: 'ok', items } : EMPTY_CART;
 }

@@ -7,12 +7,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CART_COOKIE,
   CART_MAX_AGE_SECONDS,
   CART_MAX_QTY,
   EMPTY_CART,
   addItem,
   parseCart,
   parseCartForDisplay,
+  readCartForDisplay,
   removeItem,
   serializeCart,
   setItemQuantity,
@@ -107,7 +109,7 @@ describe('display-only client parse (badge)', () => {
     const encoded = serializeCart(source, NOW);
     // The badge reads document.cookie, which returns the percent-encoded value.
     const raw = encodeURIComponent(encoded);
-    expect(parseCartForDisplay(raw)).toEqual(source);
+    expect(parseCartForDisplay(raw, NOW + 1000)).toEqual(source);
   });
 
   it('is lenient on garbage and missing input', () => {
@@ -121,7 +123,7 @@ describe('display-only client parse (badge)', () => {
     const encoded = serializeCart(source, NOW);
     const body = JSON.parse(encoded);
     body.items[0].qty = 77;
-    expect(parseCartForDisplay(encodeURIComponent(JSON.stringify(body)))).toEqual([
+    expect(parseCartForDisplay(encodeURIComponent(JSON.stringify(body)), NOW + 1000)).toEqual([
       { sku: 'SHY-A', qty: 77, priceCents: 1000, addedAt: body.items[0].addedAt },
     ]);
   });
@@ -131,8 +133,32 @@ describe('display-only client parse (badge)', () => {
     const encoded = serializeCart(source, NOW);
     const body = JSON.parse(encoded);
     body.items.push({ sku: 'SHY-B', qty: 0, priceCents: 1000, addedAt: NOW }); // qty 0 is invalid
-    const shown = parseCartForDisplay(encodeURIComponent(JSON.stringify(body)));
+    const shown = parseCartForDisplay(encodeURIComponent(JSON.stringify(body)), NOW + 1000);
     expect(shown.map((item) => item.sku)).toEqual(['SHY-A']);
+  });
+
+  it('treats an expired cookie as empty so the badge matches the cleared page', () => {
+    // serializeCart with `0` writes an expiry in the far past.
+    const encoded = serializeCart(items([['SHY-A', 3, 15000]]), 0);
+    expect(parseCartForDisplay(encodeURIComponent(encoded), NOW).length).toBe(0);
+    // Without an explicit `now`, the current timestamp is still after expiry.
+    expect(parseCartForDisplay(encodeURIComponent(encoded))).toEqual([]);
+  });
+
+  it('treats a void (unsigned) payload as empty for display', () => {
+    const encoded = serializeCart(items([['SHY-A', 2, 15000]]), NOW);
+    const body = JSON.parse(encoded);
+    delete body.sig;
+    expect(parseCartForDisplay(encodeURIComponent(JSON.stringify(body)))).toEqual([]);
+  });
+
+  it('ignores a legacy plain-array cookie in the badge (no envelope)', () => {
+    expect(parseCartForDisplay(encodeURIComponent(JSON.stringify(['SHY-A', 'SHY-B'])))).toEqual([]);
+  });
+
+  it('readCartForDisplay skips an expired cookie value in a full cookie header', () => {
+    const encoded = encodeURIComponent(serializeCart(items([['SHY-A', 4, 15000]]), 0));
+    expect(readCartForDisplay(`other=1; ${CART_COOKIE}=${encoded}; foo=2`, NOW)).toEqual([]);
   });
 });
 

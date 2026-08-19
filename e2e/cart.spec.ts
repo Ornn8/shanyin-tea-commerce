@@ -70,6 +70,23 @@ async function centsOf(locator: Locator): Promise<number> {
   return parseInt(text.replace(/\D/g, '') || '0', 10);
 }
 
+/** Read the lines persisted in the live `shanyin_cart` cookie from the browser. */
+async function cartCookieItems(page: import('@playwright/test').Page): Promise<Array<{ sku: string; qty: number }>> {
+  return page.evaluate(() => {
+    const match = document.cookie.match(/(?:^|;\s*)shanyin_cart=([^;]*)/);
+    if (!match) return [];
+    try {
+      return (JSON.parse(decodeURIComponent(match[1]))?.items ?? []) as Array<{ sku: string; qty: number }>;
+    } catch {
+      return [];
+    }
+  });
+}
+
+async function hasCartCookie(page: import('@playwright/test').Page): Promise<boolean> {
+  return page.evaluate(() => document.cookie.includes(`shanyin_cart=`));
+}
+
 test.describe('cart — full add-to-cart journey per locale', () => {
   test.beforeAll(async () => {
     await seedCartE2e();
@@ -178,9 +195,11 @@ test.describe('cart — full add-to-cart journey per locale', () => {
     });
   }
 
-  test('expired cart cookie surfaces the localized expired notice', async ({ page }) => {
+  test('expired cart cookie surfaces the localized notice, clears the cookie, and clears the badge', async ({ page }) => {
     // A signed payload whose expiry is in the past: the server must never
-    // display it and must communicate the cleared cart in the active locale.
+    // display it, must communicate the cleared cart in the active locale, and
+    // must persist the cleanup — an expired cookie must not keep the header
+    // badge counting on every reload.
     const expired: CartItem = { sku: CART_SKU_MAIN, qty: 2, priceCents: 15000, addedAt: 1 };
     await page.context().addCookies([
       { name: 'shanyin_cart', value: serializeCart([expired], 0), url: BASE_URL },
@@ -189,6 +208,76 @@ test.describe('cart — full add-to-cart journey per locale', () => {
     await expect(page.getByTestId('cart-expired')).toBeVisible();
     await expect(page.getByTestId('cart-empty')).toBeVisible();
     await expect(page.getByTestId('cart-line')).toHaveCount(0);
+    // The reconciliation pass persists the cleanup: the cookie is removed and
+    // the badge stops showing the stale count.
+    await expect.poll(() => hasCartCookie(page)).toBe(false);
+    await expect(page.getByTestId('cart-count')).toHaveCount(0);
+    // A reload keeps it cleared — not just this render.
+    await page.reload();
+    await expect.poll(() => hasCartCookie(page)).toBe(false);
+    await expect(page.getByTestId('cart-count')).toHaveCount(0);
+  });
+
+  test('reconciliation: an unpublished line is pruned from the cookie and does not reappear', async ({ page }) => {
+    await page.goto('/en/products/e2e-cart-revalidate');
+    await page.getByTestId('add-to-cart').click();
+    await expect(page.getByTestId('cart-count')).toHaveText('1');
+
+    try {
+      await setProductPublished('e2e-cart-revalidate', false);
+      await page.goto('/en/cart');
+      await expect(page.getByTestId('cart-removed-notice')).toBeVisible();
+      // The reconciliation pass prunes the unpublished SKU from the signed
+      // cookie so it cannot reappear after the product is re-published.
+      await expect
+        .poll(async () => (await cartCookieItems(page)).some((line) => line.sku === CART_SKU_REVALIDATE))
+        .toBe(false);
+
+      await setProductPublished('e2e-cart-revalidate', true);
+      await page.reload();
+      await expect(page.getByTestId('cart-line')).toHaveCount(0);
+      await expect(page.getByTestId('cart-count')).toHaveCount(0);
+    } finally {
+      await setProductPublished('e2e-cart-revalidate', true);
+      await setVariantInventory(CART_SKU_REVALIDATE, 10);
+      await setVariantPrice(CART_SKU_REVALIDATE, 15000);
+    }
+  });
+
+  test('reconciliation: a stock clamp is persisted and does not jump back when stock is restored', async ({ page }) => {
+    await page.goto('/en/products/e2e-cart-revalidate');
+    await page.getByTestId('add-to-cart').click();
+    await expect(page.getByTestId('cart-count')).toHaveText('1');
+    await page.goto('/en/cart');
+    await page.getByTestId(`cart-qty-increase-${CART_SKU_REVALIDATE}`).click();
+    await expect(page.getByTestId(`cart-qty-${CART_SKU_REVALIDATE}`)).toHaveText('2');
+
+    try {
+      await setVariantInventory(CART_SKU_REVALIDATE, 1);
+      await page.reload();
+      await expect(page.getByTestId(`cart-insufficient-stock-${CART_SKU_REVALIDATE}`)).toBeVisible();
+      await expect(page.getByTestId(`cart-qty-${CART_SKU_REVALIDATE}`)).toHaveText('1');
+      // The reconciliation pass rewrites the stored quantity to the clamped
+      // value (1), so it can never silently regain the old 2.
+      await expect
+        .poll(async () => (await cartCookieItems(page)).find((line) => line.sku === CART_SKU_REVALIDATE)?.qty ?? 0)
+        .toBe(1);
+
+      await setVariantInventory(CART_SKU_REVALIDATE, 10);
+      await page.reload();
+      // The persisted clamp holds: the quantity stays at 1 (no jump back), the
+      // shortage flag clears, and the increase control is re-enabled by stock.
+      await expect(page.getByTestId(`cart-qty-${CART_SKU_REVALIDATE}`)).toHaveText('1');
+      await expect(page.getByTestId(`cart-insufficient-stock-${CART_SKU_REVALIDATE}`)).toHaveCount(0);
+      await expect(page.getByTestId(`cart-qty-increase-${CART_SKU_REVALIDATE}`)).toBeEnabled();
+      // The cookie itself holds the clamped quantity.
+      const persisted = await cartCookieItems(page);
+      expect(persisted.find((line) => line.sku === CART_SKU_REVALIDATE)?.qty).toBe(1);
+    } finally {
+      await setProductPublished('e2e-cart-revalidate', true);
+      await setVariantInventory(CART_SKU_REVALIDATE, 10);
+      await setVariantPrice(CART_SKU_REVALIDATE, 15000);
+    }
   });
 
   test('server revalidation: stock clamp, price change, and unpublish removal', async ({ page }) => {

@@ -123,8 +123,45 @@
   checkout can migrate the signed cookie into a server-side cart transaction.
 - The cart is single-browser (stateless cookie): not shared across devices, and `CART_SECRET`
   must remain stable for the cookie lifetime.
-- The header badge is client-side and may momentarily count a line whose product was
-  unpublished until the next mutation prunes it; the cart page already shows the localized
-  removal notice (ADR-0007 records this).
+- The header badge is client-side and cannot detect an unpublished line (no lookup without a
+  server round trip), so it may momentarily count such a line until a cart view or mutation
+  prunes it; the cart page shows the localized removal notice (ADR-0007 records this). The
+  badge DOES honor the readable envelope, so an expired or void cookie never counts.
 - Seed data is unchanged; e2e cart fixtures are created and cleaned directly in the database
   (`e2e/helpers/cart-db.ts`), re-publishing any fixture the tests unpublish in teardown.
+
+## Repair — review block on PR #34 (2026-08-19)
+
+The agent review blocked head `8577fc7` with **[P1] Persist cleared and revalidated cart
+state**: the cart page only parsed and filtered the signed cookie — it never deleted or
+rewrote it, so an expired cart kept the header badge counting on every reload, and unpublished
+lines or inventory clamps could reappear after re-publication or a stock restore.
+
+Fix (root cause: read-time revalidation results were not persisted back to the cookie):
+
+- `src/lib/cart.ts` — `parseCartForDisplay` / `readCartForDisplay` now honor the readable
+  payload envelope (version, presence of a signature, and the expiry): an expired or void
+  cookie reads as empty, so the badge never contradicts the page's "cleared" state.
+- `src/lib/cart-service.ts` — new `reconcileCartState`: an expired/void/empty cart clears to
+  empty; unpublished/unknown lines are pruned; surviving line quantities are clamped to the
+  CURRENT inventory; out-of-stock (0) lines cannot honestly persist a quantity and are dropped.
+- `src/lib/cart-actions.ts` — new `reconcileCartAction` server action that deletes the cookie
+  when empty/void or rewrites the signed cookie only when the persisted state differs from the
+  revalidated state (idempotent no-op otherwise). Cookie mutation runs in a Server Action
+  because Next.js disallows it during a Server Component render.
+- `src/components/cart-shell.tsx` — the cart page calls the reconcile action once on mount and
+  syncs the badge via `shanyin:cart`; it deliberately does not `router.refresh()`, so the
+  localized expired/removal notices the server rendered stay visible.
+
+Verification on Node.js 24-equivalent checks (locally Node 22, pass identical):
+
+- `pnpm i18n:check` — passes (104 keys, 3 locales).
+- `pnpm lint`, `pnpm typecheck`, `pnpm build` — pass.
+- `pnpm test` — 153 tests pass (13 files), including new unit coverage (expired/void/legacy
+  badge reads) and new integration coverage (`reconcileCartState`: clears, prunes, clamps,
+  out-of-stock drop, no-op on a valid cart).
+- `pnpm e2e` — 96 Playwright tests pass (2 projects × 48), including new journeys: the expired
+  cookie surfaces the localized notice AND is removed from the browser with the badge cleared
+  across reloads; an unpublished line is pruned from the cookie and does not reappear after
+  re-publication; a stock clamp is persisted so the quantity does not jump back when stock is
+  restored.
