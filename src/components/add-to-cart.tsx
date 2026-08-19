@@ -2,6 +2,7 @@
 
 import { useTransition, useState } from 'react';
 import { addToCartAction } from '@/lib/cart-actions';
+import { withCartLock } from '@/lib/cart-lock';
 
 interface AddToCartProps {
   sku: string;
@@ -18,6 +19,12 @@ interface AddToCartProps {
  * same round trip (ADR-0007), and the signed cart cookie is written by the
  * server — the client never serializes or signs the cart. The header badge is
  * kept in sync via the `shanyin:cart` event.
+ *
+ * The mutation runs under the storefront-wide cart write lock
+ * (`withCartLock`), so a concurrent add from ANOTHER tab cannot be silently
+ * overwritten: the lock serializes every cart read-modify-write round trip
+ * across all same-origin tabs, and the server action always re-reads the
+ * latest committed cookie before writing (ADR-0007).
  */
 export function AddToCart({ sku, label, addedLabel, errorLabel, disabled = false }: AddToCartProps) {
   const [pending, startTransition] = useTransition();
@@ -27,7 +34,7 @@ export function AddToCart({ sku, label, addedLabel, errorLabel, disabled = false
     if (pending) return;
     startTransition(async () => {
       try {
-        const result = await addToCartAction(sku, 1);
+        const result = await withCartLock(() => addToCartAction(sku, 1));
         if (result.ok) {
           setState('added');
           window.dispatchEvent(new Event('shanyin:cart'));

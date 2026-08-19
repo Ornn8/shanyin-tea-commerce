@@ -26,6 +26,8 @@ import {
  *  - server-side revalidation: a concurrent stock change clamps the quantity
  *    and reports it, a price change is reported against the stored snapshot,
  *    an un-published product is removed with a localized notice;
+ *  - cross-tab serialization: concurrent additions from two tabs both persist
+ *    (every cart cookie write runs under the storefront-wide lock);
  *  - an expired/tampered cart cookie surfaces the localized expired state;
  *  - keyboard operation + screen-reader live region + focus restoration after
  *    removal, long labels (incl. Japanese) wrapping without overflow;
@@ -336,6 +338,67 @@ test.describe('cart — full add-to-cart journey per locale', () => {
       await setProductPublished('e2e-cart-revalidate', true);
       await setVariantInventory(CART_SKU_REVALIDATE, 10);
       await setVariantPrice(CART_SKU_REVALIDATE, 15000);
+    }
+  });
+
+  test('cross-tab: concurrent additions from two tabs both persist (no lost update)', async ({ page }) => {
+    // Tab A and tab B share ONE browser context — the same cookie store, which
+    // is exactly the cross-tab cart scenario. Each cart action reads its own
+    // request's cookie snapshot and rewrites the WHOLE cookie, so without
+    // serialization two tabs adding different SKUs can each start from the
+    // same snapshot and the last Set-Cookie silently drops the other addition.
+    // Every cart write runs under the storefront-wide lock (`withCartLock`,
+    // ADR-0007), so the two round trips are serialized and both survive.
+    const pageB = await page.context().newPage();
+
+    // Hold the server-action POSTs open so the two mutations genuinely
+    // overlap: the second tab's request is issued (or, with the lock, queued
+    // behind the first) before the first response lands. Without the lock this
+    // is precisely the ordering that loses one SKU. Non-action traffic passes
+    // through untouched.
+    let delayedActions = 0;
+    await page.context().route('**/*', async (route) => {
+      const headers = route.request().headers();
+      if (typeof headers['next-action'] === 'string') {
+        delayedActions += 1;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      await route.continue();
+    });
+
+    try {
+      await page.goto('/en/products/e2e-cart-primary');
+      await pageB.goto('/en/products/e2e-cart-longname');
+
+      // Click A, then B while A's (delayed) action is still in flight.
+      await page.getByTestId('add-to-cart').click();
+      await page.waitForTimeout(150);
+      await pageB.getByTestId('add-to-cart').click();
+
+      // Both additions land. After A's write the shared cookie holds MAIN; once
+      // B's serialized write merges onto it, both lines are present.
+      await expect(page.getByTestId('cart-count')).toHaveText('1');
+      await expect(pageB.getByTestId('cart-count')).toHaveText('2');
+
+      // Both cart actions really were held open by the route (they landed
+      // through the interception), so the overlap was exercised — with the
+      // fix, B's request was additionally queued behind A's by the storefront
+      // lock rather than racing it.
+      expect(delayedActions).toBeGreaterThanOrEqual(2);
+
+      // Neither addition was lost: the cart re-renders with BOTH SKUs and the
+      // persisted cookie holds both lines.
+      await page.goto('/en/cart');
+      await expect(page.getByTestId('cart-line')).toHaveCount(2);
+      await expect(page.getByTestId(`cart-qty-${CART_SKU_MAIN}`)).toHaveText('1');
+      await expect(page.getByTestId(`cart-qty-${CART_SKU_LONGNAME}`)).toHaveText('1');
+      const persisted = await cartCookieItems(page);
+      expect(persisted.map((line) => line.sku).sort()).toEqual(
+        [CART_SKU_MAIN, CART_SKU_LONGNAME].sort(),
+      );
+    } finally {
+      await page.context().unroute('**/*');
+      await pageB.close();
     }
   });
 

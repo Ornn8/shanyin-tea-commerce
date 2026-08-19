@@ -108,6 +108,25 @@ flight per cart view):
   (e.g. a concurrent tab), the action skips its write and reports no change, so
   a stale snapshot can never win.
 
+**Every cart write is serialized across all tabs of the storefront.** Each cart
+action is a read-modify-write on its request's own cookie snapshot, so two
+same-origin browsing contexts (tabs) that start from the same snapshot and each
+rewrite the whole cookie let the LAST `Set-Cookie` silently drop the other
+mutation — two product tabs adding different SKUs lose one addition. A
+server-side guard cannot fix this: an action only ever sees its own request's
+cookie, and the cart is deliberately cookie-only (no shared server-side cart
+table). The storefront therefore places EVERY cart cookie write — add-to-cart,
+quantity, remove, empty, and the background reconcile — behind ONE client-side
+lock (`withCartLock`, `src/lib/cart-lock.ts`) backed by the Web Locks API
+(`navigator.locks`): while the lock is held no other tab can even start its
+mutation, so each later request is sent only after the earlier response's
+`Set-Cookie` has been applied and carries every committed change, which the
+action then re-reads and merges onto. One cookie write is ever in flight at a
+time across all tabs. On browsers without `navigator.locks` (older
+Safari/webviews) the lock degrades to per-tab serialization; the action's
+request-time re-read still prevents data corruption, and cross-tab races on
+those browsers are a recorded, non-blocking limitation.
+
 **Subtotal + clearly labeled non-binding shipping estimate.** Totals use
 revalidated prices and effective quantities in integer CNY cents. The shipping
 estimate (`src/lib/shipping-estimate.ts`) is a deterministic demo rule —
@@ -154,9 +173,15 @@ native per-character breaking), so a Japanese long name never overflows the
   against the rendered cookie value as a cross-tab backstop — so a background
   reconcile cannot clobber a remove/quantity/clear that landed after the
   render.
+- Every cart cookie write runs under one storefront-wide client lock
+  (`withCartLock`), so no tab's mutation can be silently overwritten by a
+  concurrent one from another tab; the Web Locks API serializes the
+  read-modify-write round trips across same-origin tabs (per-tab serialization
+  on browsers without `navigator.locks`, recorded as non-blocking).
 - New unit/integration suites (`tests/unit/cart.test.ts`,
-  `tests/integration/cart.test.ts`) and a Playwright spec
-  (`e2e/cart.spec.ts`) cover the signed model, all localized states, the
-  shipping threshold, recovery, locale switching, concurrent stock/price
-  changes, unpublish removal, keyboard/live-region/focus behavior, long
-  labels, and both viewports.
+  `tests/unit/cart-lock.test.ts`, `tests/integration/cart.test.ts`) and a
+  Playwright spec (`e2e/cart.spec.ts`) cover the signed model, all localized
+  states, the shipping threshold, recovery, locale switching, concurrent
+  stock/price changes, unpublish removal, cross-tab serialization (two tabs
+  adding concurrently never lose a mutation), keyboard/live-region/focus
+  behavior, long labels, and both viewports.

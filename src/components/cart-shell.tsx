@@ -8,6 +8,7 @@ import { formatCny } from '@/i18n/format';
 import type { LocaleId } from '@/i18n/registry';
 import { CART_MAX_QTY } from '@/lib/cart';
 import { SHIPPING_FREE_THRESHOLD_CENTS } from '@/lib/shipping-estimate';
+import { withCartLock } from '@/lib/cart-lock';
 import {
   emptyCartAction,
   reconcileCartAction,
@@ -110,9 +111,14 @@ export function CartShell({
   //     disabled during `reconciling`). At most one cookie write is ever in
   //     flight per cart view, so the reconcile's request-time cookie snapshot
   //     cannot be ordered under a mutation that shares it.
-  //  3. Compare-and-set — the server action is handed this render's exact
+  //  3. Cross-tab — every cart write in the storefront (add to cart included)
+  //     runs under the shared `withCartLock` (Web Locks), so a write in this
+  //     tab and a concurrent write in another tab can never overlap either;
+  //     the later request is sent only after the earlier `Set-Cookie` landed.
+  //  4. Compare-and-set — the server action is handed this render's exact
   //     cookie value and skips its write if the cookie changed since (the
-  //     backstop for concurrent tabs), so a stale snapshot can never win.
+  //     backstop for browsers without a shared lock), so a stale snapshot can
+  //     never win.
   //
   // Because the reconcile is serialized, it can safely re-run whenever a later
   // render still surfaces something to persist (e.g. the post-mutation refresh
@@ -129,7 +135,7 @@ export function CartShell({
     let cancelled = false;
     (async () => {
       try {
-        const result = await reconcileCartAction(expectedCartCookie);
+        const result = await withCartLock(() => reconcileCartAction(expectedCartCookie));
         if (!cancelled && result.ok && result.changed) {
           window.dispatchEvent(new Event('shanyin:cart'));
         }
@@ -158,7 +164,7 @@ export function CartShell({
     startTransition(async () => {
       mutateInFlightRef.current = true;
       try {
-        const result = await setCartItemQuantityAction(sku, next);
+        const result = await withCartLock(() => setCartItemQuantityAction(sku, next));
         if (result.ok) {
           window.dispatchEvent(new Event('shanyin:cart'));
           notify(t('cart.qtyChanged', { name, qty: next }));
@@ -179,7 +185,7 @@ export function CartShell({
     startTransition(async () => {
       mutateInFlightRef.current = true;
       try {
-        const result = await removeCartItemAction(sku);
+        const result = await withCartLock(() => removeCartItemAction(sku));
         if (result.ok) {
           window.dispatchEvent(new Event('shanyin:cart'));
           notify(t('cart.itemRemoved', { name }));
@@ -203,7 +209,7 @@ export function CartShell({
     startTransition(async () => {
       mutateInFlightRef.current = true;
       try {
-        const result = await emptyCartAction();
+        const result = await withCartLock(() => emptyCartAction());
         if (result.ok) {
           window.dispatchEvent(new Event('shanyin:cart'));
           router.refresh();

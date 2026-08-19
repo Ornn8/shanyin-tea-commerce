@@ -92,9 +92,12 @@ locales. Each cart view also persists what the page just revalidated: an expired
 is cleared, unpublished lines are pruned, and quantities are clamped to current stock, so stale
 state cannot linger in the header badge or reappear after re-publication or a stock restore.
 The signing boundary is server-only (`src/lib/cart-signing.ts`), so `node:crypto` never enters
-the browser bundle, and the persistence write is gated, serialized with user mutations (mutually
-exclusive in the client shell), and compare-and-set guarded (cross-tab backstop) so a background
-reconcile can never fight a newer user mutation. See
+the browser bundle. Cart writes are fully serialized so none can be lost: the persistence write
+is gated, serialized with user mutations (mutually exclusive in the client shell), and
+compare-and-set guarded (cross-tab backstop) so a background reconcile can never fight a newer
+user mutation, and every cart cookie write (add-to-cart included) runs under one storefront-wide
+lock (`src/lib/cart-lock.ts`, Web Locks API) so two tabs adding concurrently never silently drop
+a mutation. See
 [ADR-0007](./docs/adr/0007-anonymous-cart-and-shipping-estimate.md).
 
 ## Scripts
