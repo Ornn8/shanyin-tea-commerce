@@ -27,6 +27,8 @@ export interface PurchaseStrings {
   unavailableOption: string;
   addToCart: string;
   addedToCart: string;
+  /** Shown when the server rejects the add (e.g. stock changed underneath). */
+  addError: string;
   /** Short "Demo" badge label for the media panel. */
   demoBadge: string;
 }
@@ -177,6 +179,7 @@ export function ProductPurchase({
               sku={selected.sku}
               label={strings.addToCart}
               addedLabel={strings.addedToCart}
+              errorLabel={strings.addError}
               disabled={!inStock}
             />
           </div>

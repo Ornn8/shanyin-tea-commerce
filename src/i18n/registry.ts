@@ -39,6 +39,13 @@ export const MESSAGE_PARAMS: Readonly<Record<string, readonly string[]>> = {
   'catalog.resultsCount': ['count'],
   'catalog.pageOf': ['page', 'pages'],
   'product.mediaAlt': ['name'],
+  'cart.qtyDecrease': ['name'],
+  'cart.qtyIncrease': ['name'],
+  'cart.qtyChanged': ['name', 'qty'],
+  'cart.itemRemoved': ['name'],
+  'cart.shippingFreeNote': ['amount'],
+  'cart.priceChanged': ['oldPrice', 'newPrice'],
+  'cart.insufficientStock': ['available', 'qty'],
 };
 
 export interface LocaleMeta {

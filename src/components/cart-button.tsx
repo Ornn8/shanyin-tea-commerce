@@ -2,18 +2,28 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { readCartCookie } from '@/lib/cart';
+import { readCartForDisplay } from '@/lib/cart';
 
 interface CartButtonProps {
   href: string;
   label: string;
 }
 
+/**
+ * Header cart badge. The count is a client-side convenience: it decodes the
+ * signed cart cookie WITHOUT verifying it (presentation only — the server is
+ * authoritative on every cart page render and every mutation). It updates on
+ * the `shanyin:cart` event (dispatched after successful server actions) and on
+ * cross-tab `storage` changes.
+ */
 export function CartButton({ href, label }: CartButtonProps) {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    const read = () => setCount(readCartCookie(document.cookie).length);
+    const read = () => {
+      const items = readCartForDisplay(document.cookie);
+      setCount(items.reduce((sum, item) => sum + item.qty, 0));
+    };
     read();
     window.addEventListener('shanyin:cart', read);
     window.addEventListener('storage', read);

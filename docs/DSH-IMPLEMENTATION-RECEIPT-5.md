@@ -1,0 +1,130 @@
+# DSH Implementation Receipt — Issue #5
+
+- **Repository:** Ornn8/shanyin-tea-commerce
+- **Issue:** #5 — Persist an anonymous cart and shipping estimate across locales
+- **Branch:** `agent/issue-5`
+- **Model:** `opencode-go/deepseek-v4-flash`
+- **Reasoning effort:** `max`
+- **Fallback policy:** No silent model fallback is accepted — every step of this
+  implementation was produced by the model identified above at `max` reasoning. If a runtime
+  or tool environment ever substitutes a different model or lower reasoning level, this
+  receipt is void and the run must be flagged.
+- **Date:** 2026-08-19
+
+## What was implemented
+
+- **Durable signed anonymous cart (`src/lib/cart.ts`, ADR-0007).** The cart persists in one
+  `shanyin_cart` cookie containing only language-neutral data — SKU, quantity, an
+  integer-cents display price snapshot captured at add time, and an add timestamp — plus an
+  expiry. The payload is HMAC-SHA256 signed with `CART_SECRET` (falling back to `AUTH_SECRET`
+  locally) so the server can detect forgery/mutation: an unsigned, tampered, or expired
+  cookie reads back as `expired` and the cart page clears it with a localized notice. The
+  legacy plain-SKU-array demo cookie is superseded (reads as expired). Client badges decode
+  the value leniently without verification — the count is display-only and the server is
+  authoritative.
+- **Server-validated, atomic, bounded quantity mutations (`src/lib/cart-actions.ts`,**
+  **`src/lib/cart-service.ts`).** `addToCart`, `setCartItemQuantity`, `removeCartItem`, and
+  `emptyCart` are server actions that re-read the live variant row (publication state,
+  current price, shared inventory) and rewrite the whole signed cookie in one round trip.
+  Quantities are bounded `1..CART_MAX_QTY` (99), additive merges are capped by the current
+  inventory, updates clamp to current inventory, and stale/unpublished lines are pruned
+  before any write (`pruneStaleState`). Prices are never client-supplied: the snapshot always
+  comes from the variant row. No mutation can describe negative inventory or more stock than
+  the shared fact holds.
+- **Server-side revalidation on every cart render (`resolveCartItems` in**
+  **`src/lib/products.ts`).** Lines whose product is unpublished/unknown are dropped and
+  communicated in localized copy; a line whose stored quantity exceeds the live inventory is
+  clamped (`effectiveQty`) and flagged `insufficient-stock`; a line whose snapshot price
+  differs from the live price is flagged `price-changed`. Cookie order is preserved and copy
+  is picked per locale, so locale switching is presentation only — lines are never duplicated
+  or dropped and SKU identity is stable.
+- **Subtotal + clearly labeled non-binding shipping estimate**
+  (`src/lib/shipping-estimate.ts`). A deterministic demo rule (¥12.00 below ¥200.00, free
+  at/over it) in integer CNY cents, rendered with locale-appropriate formatting alongside the
+  subtotal and an estimated total; the page reiterates "Demo cart — no checkout; all amounts,
+  including the shipping estimate, are non-binding."
+- **Localized states in `zh-CN`/`en`/`ja`.** New catalog keys cover add, update, remove,
+  empty (`cart.emptyCart`), expired, removed/unavailable, price-changed, insufficient-stock,
+  out-of-stock, subtotal, shipping estimate (with free-shipping note), estimated total, and
+  add/update error copy; interpolation params are declared in `MESSAGE_PARAMS` and validated
+  by `pnpm i18n:check`.
+- **Accessible cart UI (`src/components/cart-shell.tsx`).** Native quantity buttons with
+  localized aria-labels, a polite `aria-live` region for quantity/removal announcements, focus
+  restored to the cart heading after removal, and `overflow-wrap: anywhere` on names/meta so
+  long labels (including Japanese) wrap instead of overflowing at 390×844; capped increase /
+  decrease controls reflect stock and quantity bounds.
+- **Product purchase integration.** The detail page's add-to-cart now calls the server action
+  (with a localized error state) instead of writing the cookie client-side, and the header
+  badge reads the signed cookie leniently for display.
+
+## Verification performed
+
+- Clean checks on Node.js 24.19.0 LTS with pnpm 11.7.0, PostgreSQL 17 via Docker Compose.
+- Migrations applied; seed unchanged (3 categories, 6 products / 18 variants, 1 merchant
+  administrator) — the cart needs no schema change.
+- `pnpm i18n:check` — 104 English source keys (17 new cart keys), 3 registered locales, 1
+  optional key; new interpolation params declared and cross-locale placeholder sets match.
+- `pnpm lint`, `pnpm typecheck` (strict), `pnpm build` (production build).
+- `pnpm test` — 144 tests (13 files, +42): new `tests/unit/cart.test.ts` (signed
+  round-trip, tamper/expiry/forgery detection, legacy-cookie handling, bounded pure
+  operations, display-only parsing, shipping boundaries) and `tests/integration/cart.test.ts`
+  (revalidation: price change, stock clamp, out-of-stock, unpublished/unknown drops,
+  locale invariance; service mutations: invalid input, unavailable/insufficient-stock
+  rejection, snapshot capture, additive cap, clamp/remove, prune).
+- `pnpm e2e` — the new `e2e/cart.spec.ts` across desktop (1440×900) and mobile (390×844):
+  one full add-to-cart path per locale (quantity stepper, subtotal, flat→free shipping
+  threshold crossing, estimated total, recovery on refresh, locale switch preserves the
+  single line), keyboard + Enter on quantity buttons, live-region announcement, focus
+  restoration after removal, long localized names (incl. Japanese) with no horizontal
+  overflow, an expired signed cookie surfacing the localized notice, and server revalidation
+  (concurrent price change, concurrent stock clamp with disabled increase, unpublish removal
+  with a localized notice), with screenshots for the CI artifact.
+
+## Acceptance mapping
+
+- Anonymous carts persist securely across refreshes and locale switches with stable SKU
+  identities: done (signed cookie, 30-day expiry, placement-proof; cart cookie order/identity
+  preserved — e2e recovery + locale switch + integration locale invariance).
+- Add, update, remove, empty, expired, unpublished, price-changed, and insufficient-stock
+  states localized in `zh-CN`/`en`/`ja`: done (catalog keys + server/page rendering; e2e per
+  locale and the expired/unpublish/price/stock paths).
+- Quantity changes server-validated, atomic, bounded, no negative inventory, no
+  client-supplied prices: done (server actions re-resolve and rewrite in one round trip;
+  bounds 1..99; clamps to live inventory; snapshot from the variant row — unit + integration).
+- Cart shows subtotal and a clearly labeled non-binding shipping estimate in CNY with
+  locale-appropriate formatting: done (subtotal, shipping estimate row + free note, estimated
+  total; `formatCny` per locale; e2e threshold crossing).
+- Locale switch changes presentation only, never duplicates or drops lines: done (cookie is
+  locale-free; `resolveCartItems` re-picks copy; asserted on every locale).
+- Keyboard and screen-reader operation, focus restoration, long labels, Japanese line
+  breaking, and 390×844/1440×900 layouts verified: done (native buttons, aria labels, polite
+  live region, heading focus restore, `overflow-wrap` guards, per-project overflow asserts +
+  screenshots).
+- Unit, integration, and Playwright tests cover cart recovery, concurrent stock change, price
+  change, and one full add-to-cart path per locale: done (see Verification).
+- This receipt identifies `opencode-go/deepseek-v4-flash` with `max` reasoning, no fallback:
+  done.
+
+## Security hardening (design notes)
+
+- The signing key never reaches the browser: the client badge parses without verification,
+  and the server re-verifies on every read and mutation, so a forged quantity or price is
+  treated as expired rather than trusted.
+- Cookie writes go through server actions only (`cookies().set` with `Path=/`, `SameSite=Lax`,
+  30-day `Max-Age`); the payload is percent-encoded on the wire by Next.js and decoded on
+  read, avoiding double-encoding.
+- `CART_SECRET` is a dedicated secret (fallback to `AUTH_SECRET` locally) documented in
+  `.env.example`, `SETUP.md`, and set in `ci.yml`.
+
+## Caveats (recorded, not blocking)
+
+- No checkout exists in this demo, so there is no inventory reservation; the guarantee is that
+  the cart never exceeds the shared facts at the moment of each validated write. A future
+  checkout can migrate the signed cookie into a server-side cart transaction.
+- The cart is single-browser (stateless cookie): not shared across devices, and `CART_SECRET`
+  must remain stable for the cookie lifetime.
+- The header badge is client-side and may momentarily count a line whose product was
+  unpublished until the next mutation prunes it; the cart page already shows the localized
+  removal notice (ADR-0007 records this).
+- Seed data is unchanged; e2e cart fixtures are created and cleaned directly in the database
+  (`e2e/helpers/cart-db.ts`), re-publishing any fixture the tests unpublish in teardown.

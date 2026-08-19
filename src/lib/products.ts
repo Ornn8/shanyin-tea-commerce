@@ -16,6 +16,7 @@
 import { prisma } from '@/lib/prisma';
 import { FALLBACK_LOCALE, type LocaleId } from '@/i18n/registry';
 import { effectiveField, type LocalizedRow } from '@/lib/admin/preview';
+import type { CartItem } from '@/lib/cart';
 import {
   CAFFEINE_LEVELS,
   CATALOG_PAGE_SIZE,
@@ -291,6 +292,108 @@ export async function getCartLines(skus: string[], locale: LocaleId): Promise<Ca
     }
   }
   return skus.flatMap((sku) => (bySku.get(sku) ? [bySku.get(sku)!] : []));
+}
+
+// ---------------------------------------------------------------------------
+// Cart revalidation (Issue #5, ADR-0007)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-line issues the cart page communicates in localized copy after
+ * server-side revalidation. `price-changed` means the live variant price
+ * differs from the stored display snapshot; `insufficient-stock` means the
+ * stored quantity exceeds the live shared inventory (the line is clamped for
+ * display — the app never claims stock that does not exist, and never
+ * fabricates scarcity beyond the shared integer fact).
+ */
+export type CartLineIssue = 'price-changed' | 'insufficient-stock';
+
+/** One resolved cart line: exact variant facts + stored intent + revalidated
+ * numbers. Prices are integer CNY cents; SKUs are language-neutral. */
+export interface CartLineView {
+  sku: string;
+  product: ProductView;
+  variant: StorefrontVariantView;
+  /** Quantity stored in the signed cart cookie. */
+  qty: number;
+  /** Quantity after server revalidation against current inventory. */
+  effectiveQty: number;
+  /** Display price snapshot stored with the line at add/update time. */
+  snapshotPriceCents: number;
+  /** Live variant price at render time (server truth, used for totals). */
+  priceCents: number;
+  issues: CartLineIssue[];
+}
+
+export interface CartResolution {
+  /** Resolved lines in cookie order; totals must use `effectiveQty *
+   * priceCents`. */
+  lines: CartLineView[];
+  /** SKUs dropped because the product is unpublished or the SKU is unknown —
+   * the cart page communicates these in localized copy. */
+  removedSkus: string[];
+}
+
+/**
+ * Revalidate the stored cart items against the live catalog on every render:
+ * publication state, current price, and current inventory. Unknown or
+ * unpublished SKUs are dropped; a line whose stored quantity exceeds the
+ * current inventory is clamped (`effectiveQty`) and flagged; a line whose
+ * snapshot price differs from the live price is flagged. Lines are never
+ * duplicated or reordered by locale — the SKU order of the cookie is
+ * preserved and the copy is picked per locale (ADR-0003/0007).
+ */
+export async function resolveCartItems(items: CartItem[], locale: LocaleId): Promise<CartResolution> {
+  const skus = items.map((item) => item.sku);
+  if (skus.length === 0) return { lines: [], removedSkus: [] };
+  const rows = await prisma.product.findMany({
+    where: { published: true, variants: { some: { sku: { in: skus } } } },
+    include: {
+      localizations: true,
+      category: { include: { localizations: true } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
+    },
+  });
+  const bySku = new Map<string, { product: ProductView; variant: StorefrontVariantView }>();
+  for (const row of rows) {
+    const product = toProductView(row, locale);
+    for (const variant of row.variants) {
+      bySku.set(variant.sku, {
+        product,
+        variant: {
+          id: variant.id,
+          sku: variant.sku,
+          name: variant.name,
+          priceCents: variant.priceCents,
+          inventory: variant.inventory,
+        },
+      });
+    }
+  }
+  const lines: CartLineView[] = [];
+  const removedSkus: string[] = [];
+  for (const item of items) {
+    const resolved = bySku.get(item.sku);
+    if (!resolved) {
+      removedSkus.push(item.sku);
+      continue;
+    }
+    const { product, variant } = resolved;
+    const issues: CartLineIssue[] = [];
+    if (variant.priceCents !== item.priceCents) issues.push('price-changed');
+    if (item.qty > variant.inventory) issues.push('insufficient-stock');
+    lines.push({
+      sku: item.sku,
+      product,
+      variant,
+      qty: item.qty,
+      effectiveQty: Math.min(item.qty, variant.inventory),
+      snapshotPriceCents: item.priceCents,
+      priceCents: variant.priceCents,
+      issues,
+    });
+  }
+  return { lines, removedSkus };
 }
 
 export async function getProductsBySkus(skus: string[], locale: LocaleId): Promise<ProductView[]> {

@@ -36,6 +36,8 @@ jobs:
       ADMIN_EMAIL: merchant@shanyin.example
       ADMIN_PASSWORD: ci-shanyin-admin-2026-demo
       AUTH_SECRET: ci-shanyin-auth-secret-4f2d1a77c3f8-change-r4
+      # Signs the anonymous cart cookie (Issue #5, ADR-0007).
+      CART_SECRET: ci-shanyin-cart-secret-4f2d1a77c3f8-change-r5
     steps:
       - name: Checkout
         uses: actions/checkout@v4

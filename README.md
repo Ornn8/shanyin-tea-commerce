@@ -61,7 +61,7 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
 | `/…/products`                  | Catalog with URL-state discovery (see below)   |
 | `/…/products/:slug`            | Product detail: variants, facts, brewing guidance, structured data |
 | `/…/search?q=…`                | Search results with the same discovery view    |
-| `/…/cart`                      | Demo cart (cookie-persisted, no checkout)      |
+| `/…/cart`                      | Durable anonymous cart: signed cookie, quantities, price snapshots, and a non-binding shipping estimate (no checkout) |
 | `/admin/login`                 | Merchant sign-in (public registration disabled)|
 | `/admin/products`              | Merchant product list (protected)              |
 | `/admin/products/new`          | Create a product draft (protected)             |
@@ -80,6 +80,15 @@ alternates, offers purchasable package-size variants (SKU, price, and stock upda
 selection), renders structured data that matches the visible price and availability, and shows
 localized brewing guidance plus published-only recommendations. See
 [ADR-0006](./docs/adr/0006-product-detail-variants.md).
+
+The anonymous cart (`/…/cart`) persists across refreshes and locale switches in one
+HMAC-signed cookie holding only language-neutral data (SKU, quantity, price snapshot), so
+switching locale changes presentation only — never duplicating or dropping lines. Every
+quantity change is a server action that re-validates publication state, current price, and
+stock (quantities stay bounded and never exceed stock; prices are never client-supplied). The
+cart shows the subtotal and a clearly labeled non-binding shipping estimate in CNY, and
+communicates expired, removed, price-changed, and insufficient-stock states in all three
+locales. See [ADR-0007](./docs/adr/0007-anonymous-cart-and-shipping-estimate.md).
 
 ## Scripts
 
@@ -113,6 +122,9 @@ see [.env.example](./.env.example)); the admin area is at `/admin`.
     variants/inventory rules, publication lifecycle, and the audit trail.
   - `0006-product-detail-variants.md` — canonical localized detail pages, client-side
     variant selection, structured-data policy, published-only recommendations.
+  - `0007-anonymous-cart-and-shipping-estimate.md` — signed anonymous cart (SKU + quantity +
+    price snapshot), server-validated bounded quantity changes, revalidation on every render,
+    and the non-binding shipping estimate.
 - [docs/DSH-IMPLEMENTATION-RECEIPT.md](./docs/DSH-IMPLEMENTATION-RECEIPT.md) — implementation
   receipt for Issue #1 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-2.md](./docs/DSH-IMPLEMENTATION-RECEIPT-2.md) — implementation
@@ -121,3 +133,5 @@ see [.env.example](./.env.example)); the admin area is at `/admin`.
   receipt for Issue #3 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-4.md](./docs/DSH-IMPLEMENTATION-RECEIPT-4.md) — implementation
   receipt for Issue #4 (model + reasoning, no fallback).
+- [docs/DSH-IMPLEMENTATION-RECEIPT-5.md](./docs/DSH-IMPLEMENTATION-RECEIPT-5.md) — implementation
+  receipt for Issue #5 (model + reasoning, no fallback).
