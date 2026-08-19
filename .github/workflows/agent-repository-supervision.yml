@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   supervise:
-    uses: Ornn8/dsh-agent-automation/.github/workflows/repository-supervisor.yml@efc20873829a635ba218abf822bbfc443688d0ed
+    uses: Ornn8/dsh-agent-automation/.github/workflows/repository-supervisor.yml@3ad9ba7c8f78da3d48e20381aae6c0c369f95d24
     with:
       upstream_repository: Ornn8/shanyin-tea-commerce
       apply_changes: ${{ github.event_name == 'schedule' || inputs.apply_changes }}
