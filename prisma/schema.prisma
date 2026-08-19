@@ -91,10 +91,18 @@ model ProductVariant {
   name       String
   priceCents Int
   inventory  Int      @default(0)
+  /// Deterministic variant order within the product (0 = the storefront
+  /// default). `createdAt` is transaction-stable in PostgreSQL (CURRENT_-
+  /// TIMESTAMP = transaction start), so without this explicit position rows
+  /// created together would tie on `createdAt` and SQL would provide no
+  /// deterministic order — the default SKU, price, and availability would
+  /// become nondeterministic (ADR-0006). Every write path stores the
+  /// merchant's variant order as 0-based positions.
+  position   Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@index([productId])
+  @@index([productId, position])
 }
 
 model ProductLocalization {

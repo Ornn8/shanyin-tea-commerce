@@ -1,6 +1,13 @@
 interface PlaceholderTeaProps {
+  /**
+   * Language-neutral seed used to derive the illustration variant. Pass a
+   * product slug (stable illustration) or a product+variant key (distinct
+   * media per variant, ADR-0006).
+   */
   slug: string;
   className?: string;
+  /** Accessible name; must be localized by callers (fallback keeps parity). */
+  alt?: string;
 }
 
 const PALETTES = [
@@ -37,14 +44,16 @@ function pickPalette(slug: string) {
  * Deliberately not a marketplace asset; replaced by merchant photography
  * before production. See PRODUCT.md.
  */
-export function PlaceholderTea({ slug, className }: PlaceholderTeaProps) {
+export function PlaceholderTea({ slug, className, alt }: PlaceholderTeaProps) {
   const palette = pickPalette(slug);
   return (
     <svg
       viewBox="0 0 400 300"
       className={className}
       role="img"
-      aria-label="Placeholder tea illustration — replace with merchant photography"
+      aria-label={
+        alt ?? 'Placeholder tea illustration — replace with merchant photography'
+      }
     >
       <defs>
         <linearGradient id={`bg-${slug}`} x1="0" y1="0" x2="1" y2="1">

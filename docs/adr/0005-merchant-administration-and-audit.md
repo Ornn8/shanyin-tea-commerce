@@ -50,7 +50,8 @@ pre-migration product was storefront-visible, the migration also backfills
 `published = true` with `publishedAt = createdAt` for the existing rows — the
 new published-only storefront queries never hide products that were visible
 before the migration; only products created afterwards start unpublished.
-Storefront views read the first-created variant; all storefront queries filter
+Storefront views read the default variant — position 0 of the persisted
+variant order (ADR-0006); all storefront queries filter
 `published: true`. Inventory is per variant and shared across locales by
 construction — localization rows carry no stock fields.
 

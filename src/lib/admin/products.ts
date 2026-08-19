@@ -83,7 +83,7 @@ export async function listAdminProducts(): Promise<AdminProductView[]> {
   const rows = await prisma.product.findMany({
     include: {
       category: { select: { slug: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
       localizations: true,
     },
     orderBy: { createdAt: 'asc' },
@@ -96,7 +96,7 @@ export async function getAdminProduct(id: string): Promise<AdminProductView | nu
     where: { id },
     include: {
       category: { select: { slug: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
       localizations: true,
     },
   });

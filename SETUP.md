@@ -50,6 +50,13 @@ credentials and the session secret:
 | `AUTH_SECRET`    | Signs the admin session cookie (long, random value in production)   |
 | `BETTER_AUTH_URL`| Optional public origin used by better-auth (default `http://localhost:3000`) |
 
+New in Issue #4 (`ADR-0006`): the public origin used to build canonical
+links, hreflang alternates, and JSON-LD URLs:
+
+| Variable          | Purpose                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| `PUBLIC_SITE_URL` | Optional trusted absolute public origin (e.g. `https://shop.example.com`). When set, canonical/structured-data URLs use it and forwarded request headers are never trusted; unset in local development, where only `localhost`/`127.0.0.1` on the dev ports are honored from headers |
+
 ## 3. Install dependencies
 
 ```bash
@@ -69,10 +76,13 @@ pnpm db:seed          # prisma db seed  (tsx prisma/seed.ts, upsert-based, idemp
 
 The seed creates 3 categories and 6 demo products, each localized in `zh-CN`, `en`, and `ja`,
 with language-neutral leaf form (`form`) and caffeine (`caffeine`) demo facts used by catalog
-filtering (ADR-0004), plus one language-neutral variant per product (SKU, integer-cents CNY
-price, inventory — ADR-0005). It also creates the single allowlisted merchant administrator
-(`ADMIN_EMAIL` / `ADMIN_PASSWORD`); public registration is disabled, so reseeding is the way
-to rotate the demo password.
+filtering (ADR-0004), three language-neutral variants per product (package-size SKUs with
+integer-cents CNY prices and inventory — ADR-0005, ADR-0006; each variant stores an explicit
+0-based position (seed order), and the position-0 variant is the
+storefront default, later ones are selectable on the detail page and include demo low-stock
+and out-of-stock states), localized brewing guidance, and the single allowlisted merchant
+administrator (`ADMIN_EMAIL` / `ADMIN_PASSWORD`); public registration is disabled, so
+reseeding is the way to rotate the demo password.
 
 ## 5. Run
 
@@ -99,10 +109,15 @@ pnpm e2e            # Playwright: storefront smoke + discovery + merchant admin 
 `pnpm test` adds the merchant-administration integration suite
 (`tests/integration/admin.test.ts`): authorization guards (anonymous, forged cookie, valid
 session, non-allowlisted user), disabled public sign-up, CSRF origin rejection (403), sign-in
-rate limiting (429), and every mutation with its audit row (no secrets). The e2e merchant
-journeys sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` and cover sign-in → create → localize
-→ publish → inventory adjustment → sign-out at desktop (1440×900) and mobile (390×844)
-widths.
+rate limiting (429), and every mutation with its audit row (no secrets). The product-detail
+integration suite (`tests/integration/product-detail.test.ts`) covers variant ordering,
+English-fallback brewing guidance, language-neutral identity stability, published-only
+recommendations, and per-SKU cart lines (ADR-0006). The e2e merchant journeys sign in with
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` and cover sign-in → create → localize → publish → inventory
+adjustment → sign-out at desktop (1440×900) and mobile (390×844) widths, and the
+product-detail journeys (`e2e/product-detail.spec.ts`) cover variant selection, low-stock,
+unavailable defaults, invalid slugs, locale switching, structured data, and accessibility for
+the same two viewports.
 
 Playwright writes screenshots to `e2e/screenshots/<project>/<locale>-*.png` and, in CI, a
 `commit.txt` with the exact tested commit. Artifacts are uploaded by the `CI` workflow

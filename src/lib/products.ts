@@ -80,10 +80,13 @@ function pickLocalization<T extends { locale: string }>(
 }
 
 /**
- * The variant a shopper sees: the product's first-created variant. The
- * storefront intentionally reads language-neutral facts (SKU, integer-cents
- * price, inventory) from variants only (ADR-0005); unpublished products are
- * never returned.
+ * The variant a shopper sees: the product's default variant — position 0 in
+ * the persisted variant order, with createdAt/id as deterministic secondary
+ * keys (ADR-0006; `createdAt` alone ties for transaction-co-created rows, so
+ * an explicit `position` is persisted by every write path). The storefront
+ * intentionally reads language-neutral facts (SKU, integer-cents price,
+ * inventory) from variants only (ADR-0005); unpublished products are never
+ * returned.
  */
 function primaryVariant(row: ProductRow) {
   return row.variants[0];
@@ -125,7 +128,7 @@ function findProductRow() {
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -142,10 +145,152 @@ export async function getProductBySlug(slug: string, locale: LocaleId): Promise<
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
   });
   return row ? toProductView(row, locale) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Product detail (Issue #4, ADR-0006)
+// ---------------------------------------------------------------------------
+
+/** One sellable unit as the storefront detail page presents it. */
+export interface StorefrontVariantView {
+  id: string;
+  /** Globally unique, language-neutral SKU. */
+  sku: string;
+  /** Shared display name (e.g. package size); not localized copy (ADR-0005). */
+  name: string;
+  priceCents: number;
+  inventory: number;
+}
+
+export interface ProductDetailView extends ProductView {
+  /** All published variants in persisted position order (variant 0 = default). */
+  variants: StorefrontVariantView[];
+  /** Brewing guidance — effective value with the ADR-0003/0005 fallback. */
+  brewingNotes: string;
+  /** Effective localized media alt text, or null when none is stored. */
+  mediaAlt: string | null;
+  /** Effective localized SEO title, or null (metadata falls back to name). */
+  seoTitle: string | null;
+  /** Effective localized SEO description, or null. */
+  seoDescription: string | null;
+}
+
+function toDetailViewForLocale(
+  row: NonNullable<Awaited<ReturnType<typeof findRowBySlug>>>,
+  locale: LocaleId,
+): ProductDetailView {
+  const base = toProductView(row, locale);
+  const rows = row.localizations as LocalizedRow[];
+  const filled = (value: string) => (value.trim().length > 0 ? value : null);
+  return {
+    ...base,
+    variants: row.variants.map((variant) => ({
+      id: variant.id,
+      sku: variant.sku,
+      name: variant.name,
+      priceCents: variant.priceCents,
+      inventory: variant.inventory,
+    })),
+    brewingNotes: effectiveField(rows, locale, 'brewingNotes'),
+    mediaAlt: filled(effectiveField(rows, locale, 'mediaAlt')),
+    seoTitle: filled(effectiveField(rows, locale, 'seoTitle')),
+    seoDescription: filled(effectiveField(rows, locale, 'seoDescription')),
+  };
+}
+
+function findRowBySlug(slug: string) {
+  return prisma.product.findUnique({
+    where: { slug, published: true },
+    include: {
+      localizations: true,
+      category: { include: { localizations: true } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
+    },
+  });
+}
+
+/** Full detail-page view: every variant plus localized brewing/SEO/media copy. */
+export async function getProductDetail(
+  slug: string,
+  locale: LocaleId,
+): Promise<ProductDetailView | null> {
+  const row = await findRowBySlug(slug);
+  return row ? toDetailViewForLocale(row, locale) : null;
+}
+
+export interface RelatedProductQuery {
+  slug: string;
+  locale: LocaleId;
+  /** Maximum number of recommendations. */
+  limit?: number;
+}
+
+/**
+ * Deterministic recommendations: published products only (never unpublished),
+ * same category first, then the rest of the catalog, excluding the current
+ * product — each product once, never duplicated by locale (product facts are
+ * language-neutral and rows are filtered at the product level, ADR-0003).
+ */
+export async function getRelatedProducts(query: RelatedProductQuery): Promise<ProductView[]> {
+  const limit = query.limit !== undefined && Number.isSafeInteger(query.limit) && query.limit > 0
+    ? query.limit
+    : 3;
+  const rows = await findProductRow();
+  const current = rows.find((row) => row.slug === query.slug);
+  if (!current) return [];
+  const others = rows.filter((row) => row.slug !== query.slug);
+  const sameCategory = others.filter((row) => row.categoryId === current.categoryId);
+  const rest = others.filter((row) => row.categoryId !== current.categoryId);
+  const ordered = [...sameCategory, ...rest].slice(0, limit);
+  return ordered.map((row) => toProductView(row, query.locale));
+}
+
+export interface CartLine {
+  /** Product display view (localized copy via the shared fallback). */
+  product: ProductView;
+  /** The exact variant the shopper added (SKU, price, inventory). */
+  variant: StorefrontVariantView;
+}
+
+/**
+ * Resolve cart SKUs to the exact variant added. The cart cookie stores SKUs
+ * — language-neutral identifiers — so a variant's own price, name, and stock
+ * are honored per line (a 250g variant shows its own price, never the
+ * product's default variant price). Unpublished products and unknown SKUs are
+ * silently dropped; order follows the cookie.
+ */
+export async function getCartLines(skus: string[], locale: LocaleId): Promise<CartLine[]> {
+  if (skus.length === 0) return [];
+  const rows = await prisma.product.findMany({
+    where: { published: true, variants: { some: { sku: { in: skus } } } },
+    include: {
+      localizations: true,
+      category: { include: { localizations: true } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
+    },
+  });
+  const bySku = new Map<string, CartLine>();
+  for (const row of rows) {
+    const product = toProductView(row, locale);
+    for (const variant of row.variants) {
+      if (!skus.includes(variant.sku)) continue;
+      bySku.set(variant.sku, {
+        product,
+        variant: {
+          id: variant.id,
+          sku: variant.sku,
+          name: variant.name,
+          priceCents: variant.priceCents,
+          inventory: variant.inventory,
+        },
+      });
+    }
+  }
+  return skus.flatMap((sku) => (bySku.get(sku) ? [bySku.get(sku)!] : []));
 }
 
 export async function getProductsBySkus(skus: string[], locale: LocaleId): Promise<ProductView[]> {
@@ -155,7 +300,7 @@ export async function getProductsBySkus(skus: string[], locale: LocaleId): Promi
     include: {
       localizations: true,
       category: { include: { localizations: true } },
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
     },
   });
   const bySku = new Map<string, ProductView>();

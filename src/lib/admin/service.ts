@@ -47,7 +47,7 @@ async function loadProductWithRelations(id: string): Promise<ProductWithRelation
   const row = await prisma.product.findUnique({
     where: { id },
     include: {
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
       localizations: true,
     },
   });
@@ -60,7 +60,7 @@ async function loadProductInTx(tx: Tx, id: string): Promise<ProductWithRelations
   const row = await tx.product.findUnique({
     where: { id },
     include: {
-      variants: { orderBy: { createdAt: 'asc' } },
+      variants: { orderBy: [{ position: 'asc' }, { createdAt: 'asc' }] },
       localizations: true,
     },
   });
@@ -175,12 +175,15 @@ async function replaceVariants(
     await tx.productVariant.deleteMany({ where: { id: { in: removed.map((variant) => variant.id) } } });
   }
 
-  for (const variant of variants) {
+  for (const [index, variant] of variants.entries()) {
     const data = {
       sku: validateSku(variant.sku),
       name: variant.name,
       priceCents: validatePriceCents(variant.priceCents),
       inventory: validateInventory(variant.inventory),
+      // The merchant's variant order is the deterministic storefront order:
+      // reordering the form reorders the default selection (ADR-0006).
+      position: index,
     };
     if (variant.id && existingById.has(variant.id)) {
       await tx.productVariant.update({ where: { id: variant.id }, data });
@@ -238,7 +241,7 @@ export async function createProduct(
     });
     // Cross-product SKU uniqueness (the global unique index is the backstop).
     await assertSkusAvailable(tx, product.id, input.variants, []);
-    for (const variant of input.variants) {
+    for (const [index, variant] of input.variants.entries()) {
       await tx.productVariant.create({
         data: {
           productId: product.id,
@@ -246,6 +249,8 @@ export async function createProduct(
           name: variant.name,
           priceCents: validatePriceCents(variant.priceCents),
           inventory: validateInventory(variant.inventory),
+          // Merchant form order → deterministic storefront order (ADR-0006).
+          position: index,
         },
       });
     }

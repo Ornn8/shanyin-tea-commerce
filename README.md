@@ -3,10 +3,12 @@
 A production-shaped vertical slice for a single-merchant tea storefront under the working brand
 **Shanyin Tea** (山隐茶事). A visitor can open the home page, switch among Simplified Chinese,
 English, and Japanese, and search and filter seeded demo tea products — served from PostgreSQL
-through the real application stack — with shareable, URL-encoded discovery state. The merchant
-can sign in through a protected administration surface (ADR-0005) to manage products, variants,
-prices, inventory, publication state, and per-locale content in one workflow, with an audit
-trail for every mutation.
+through the real application stack — with shareable, URL-encoded discovery state. Each tea has a
+canonical localized detail page with purchasable package-size variants (stable SKUs, prices, and
+inventory), localized brewing guidance, structured data, and suggestions. The merchant can sign
+in through a protected administration surface (ADR-0005) to manage products, variants, prices,
+inventory, publication state, and per-locale content in one workflow, with an audit trail for
+every mutation.
 
 > ⚠️ **Demo content.** All commercial claims, certifications, origins, prices, and imagery in
 > this repository are replaceable placeholders until the merchant supplies verified assets.
@@ -57,7 +59,7 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
 | `/`                            | Redirects to the persisted (or default) locale |
 | `/zh-CN`, `/en`, `/ja`         | Localized home page                            |
 | `/…/products`                  | Catalog with URL-state discovery (see below)   |
-| `/…/products/:slug`            | Product detail + add-to-cart                   |
+| `/…/products/:slug`            | Product detail: variants, facts, brewing guidance, structured data |
 | `/…/search?q=…`                | Search results with the same discovery view    |
 | `/…/cart`                      | Demo cart (cookie-persisted, no checkout)      |
 | `/admin/login`                 | Merchant sign-in (public registration disabled)|
@@ -72,6 +74,12 @@ filters, sort order, and page are encoded in the URL — `q`, `category`, `form`
 yuan), `inStock` (`true`/`false`), `sort` (`featured`/`price-asc`/`price-desc`/`name-asc`),
 and `page` — so results survive refresh, back/forward navigation, and locale switching. See
 [ADR-0004](./docs/adr/0004-catalog-discovery-url-state.md) for the full contract.
+
+Every product detail page (`/…/products/:slug`) is canonical per locale with hreflang
+alternates, offers purchasable package-size variants (SKU, price, and stock update in place on
+selection), renders structured data that matches the visible price and availability, and shows
+localized brewing guidance plus published-only recommendations. See
+[ADR-0006](./docs/adr/0006-product-detail-variants.md).
 
 ## Scripts
 
@@ -103,9 +111,13 @@ see [.env.example](./.env.example)); the admin area is at `/admin`.
     locale-scoped search with a deterministic fallback.
   - `0005-merchant-administration-and-audit.md` — better-auth, the allowlisted admin,
     variants/inventory rules, publication lifecycle, and the audit trail.
+  - `0006-product-detail-variants.md` — canonical localized detail pages, client-side
+    variant selection, structured-data policy, published-only recommendations.
 - [docs/DSH-IMPLEMENTATION-RECEIPT.md](./docs/DSH-IMPLEMENTATION-RECEIPT.md) — implementation
   receipt for Issue #1 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-2.md](./docs/DSH-IMPLEMENTATION-RECEIPT-2.md) — implementation
   receipt for Issue #2 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-3.md](./docs/DSH-IMPLEMENTATION-RECEIPT-3.md) — implementation
   receipt for Issue #3 (model + reasoning, no fallback).
+- [docs/DSH-IMPLEMENTATION-RECEIPT-4.md](./docs/DSH-IMPLEMENTATION-RECEIPT-4.md) — implementation
+  receipt for Issue #4 (model + reasoning, no fallback).
