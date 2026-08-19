@@ -83,17 +83,30 @@ cookie that already matches is left untouched, so it is safe to run on every
 view. Cookie mutation is a Server Action in Next.js, so this persistence is
 deliberately not done during the render itself.
 
-Reconciliation is serialized against the shopper's own mutations by two
-guards, so a background write can never fight a newer action:
+Reconciliation is serialized against the shopper's own mutations, so a
+background write can never fight a newer action. The server action's
+compare-and-set guard alone is NOT sufficient: each request sees only its own
+cookie snapshot, so a mount-time reconcile and a mutation that both start from
+the same render can each pass the guard and race — if the reconcile response is
+applied last, its `Set-Cookie` overwrites the newer mutation. The client shell
+therefore makes the two writes mutually exclusive (at most one cookie write in
+flight per cart view):
 
 - **Gating** — the page only asks for reconciliation when this render actually
   surfaced something to persist (an expired/void cookie, a dropped line, or a
   stock clamp). A plain revalidation render issues no competing cookie write.
-- **Compare-and-set** — the shell passes this render's exact cookie value to
-  `reconcileCartAction`; if the cookie has since been rewritten by a user
-  mutation (or another tab), the action skips its write and reports no change.
-  A reconcile finishing last can therefore never resurrect a removed item or
+- **Mutual exclusion / serialization** — the reconcile never starts while a
+  user mutation is in flight (it yields: the mutation owns the cookie and
+  rewrites it from a fresh read, and the refreshed render re-evaluates), and no
+  mutation can start while a reconcile is in flight (the cart controls are
+  disabled for the brief reconcile). With at most one write in flight, the
+  reconcile's request-time cookie snapshot can never be ordered under a
+  mutation that shares it, so a reconcile can never resurrect a removed item or
   undo a new quantity.
+- **Compare-and-set (backstop)** — the shell still passes this render's exact
+  cookie value to `reconcileCartAction`; if the cookie has since been rewritten
+  (e.g. a concurrent tab), the action skips its write and reports no change, so
+  a stale snapshot can never win.
 
 **Subtotal + clearly labeled non-binding shipping estimate.** Totals use
 revalidated prices and effective quantities in integer CNY cents. The shipping
@@ -136,9 +149,11 @@ native per-character breaking), so a Japanese long name never overflows the
   may still briefly count a line whose product was unpublished until a cart
   view or mutation prunes it — recorded, not blocking.
 - Reconcile persistence never fights a newer user action: it is gated to
-  renders that surfaced something to persist, and its write is compare-and-set
-  against the rendered cookie value, so a background reconcile cannot clobber a
-  remove/quantity/clear that landed after the render.
+  renders that surfaced something to persist, serialized with user mutations
+  (mutually exclusive in the client shell), and its write is compare-and-set
+  against the rendered cookie value as a cross-tab backstop — so a background
+  reconcile cannot clobber a remove/quantity/clear that landed after the
+  render.
 - New unit/integration suites (`tests/unit/cart.test.ts`,
   `tests/integration/cart.test.ts`) and a Playwright spec
   (`e2e/cart.spec.ts`) cover the signed model, all localized states, the

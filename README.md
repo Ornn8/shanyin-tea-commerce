@@ -92,7 +92,8 @@ locales. Each cart view also persists what the page just revalidated: an expired
 is cleared, unpublished lines are pruned, and quantities are clamped to current stock, so stale
 state cannot linger in the header badge or reappear after re-publication or a stock restore.
 The signing boundary is server-only (`src/lib/cart-signing.ts`), so `node:crypto` never enters
-the browser bundle, and the persistence write is gated + compare-and-set guarded so a background
+the browser bundle, and the persistence write is gated, serialized with user mutations (mutually
+exclusive in the client shell), and compare-and-set guarded (cross-tab backstop) so a background
 reconcile can never fight a newer user mutation. See
 [ADR-0007](./docs/adr/0007-anonymous-cart-and-shipping-estimate.md).
 

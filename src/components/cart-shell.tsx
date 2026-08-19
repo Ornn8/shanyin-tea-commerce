@@ -80,9 +80,15 @@ export function CartShell({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [pending, startTransition] = useTransition();
   const [announce, setAnnounce] = useState<{ id: number; text: string } | null>(null);
-  // Guard so the mount reconcile runs once per page view even if the
-  // server-rendered props change on a refresh.
-  const reconciledRef = useRef(false);
+  // Serialization between the background reconcile and the shopper's own
+  // mutations (ADR-0007): a reconcile write must never land on top of a newer
+  // user mutation, so the two are mutually exclusive. `reconciling` (state)
+  // also disables the cart controls for the brief in-flight reconcile so a
+  // click is parked until it finishes instead of being silently swallowed into
+  // a request race; the refs are read synchronously by the effect and handlers.
+  const [reconciling, setReconciling] = useState(false);
+  const reconcileInFlightRef = useRef(false);
+  const mutateInFlightRef = useRef(false);
 
   const empty = lines.length === 0;
 
@@ -90,23 +96,36 @@ export function CartShell({
   // clear an expired/void cookie, prune unpublished/unknown lines, and clamp
   // quantities to the current inventory — so the header badge cannot keep
   // showing a stale count and revealed shortages cannot reappear after stock
-  // is restored. Two guards keep this from racing the shopper's own actions:
+  // is restored. The persist write is SERIALIZED against the shopper's own
+  // mutations so a background reconcile can never overwrite a newer user
+  // action:
   //
   //  1. Gating — it only fires when this render actually surfaced something to
   //     persist (expired/void cookie, dropped lines, or a stock clamp), so a
   //     plain revalidation render issues no competing cookie write.
-  //  2. Compare-and-set — the server action is handed this render's exact
-  //     cookie value and skips its write if a user mutation has since changed
-  //     the cookie, so a background reconcile can never resurrect a removed
-  //     item or undo a new quantity.
+  //  2. Mutual exclusion — the reconcile never starts while a user mutation is
+  //     in flight (it yields: the mutation owns the cookie and rewrites it from
+  //     a fresh read, and the refreshed render re-evaluates), and no mutation
+  //     can start while a reconcile is in flight (the cart controls are
+  //     disabled during `reconciling`). At most one cookie write is ever in
+  //     flight per cart view, so the reconcile's request-time cookie snapshot
+  //     cannot be ordered under a mutation that shares it.
+  //  3. Compare-and-set — the server action is handed this render's exact
+  //     cookie value and skips its write if the cookie changed since (the
+  //     backstop for concurrent tabs), so a stale snapshot can never win.
   //
-  // Idempotent: a cookie that already matches is left untouched. There is
-  // deliberately no router.refresh() here so the localized expired/removed
-  // notices the server rendered stay visible; the badge is synced via the
-  // `shanyin:cart` event instead.
+  // Because the reconcile is serialized, it can safely re-run whenever a later
+  // render still surfaces something to persist (e.g. the post-mutation refresh
+  // render) — now against the newer cookie. A reconcile never triggers a
+  // router.refresh() itself, so there is no write/render loop, and the
+  // localized expired/removal notices the server rendered stay visible; the
+  // badge is synced via the `shanyin:cart` event instead.
   useEffect(() => {
-    if (!needsReconcile || reconciledRef.current) return;
-    reconciledRef.current = true;
+    if (!needsReconcile) return;
+    if (reconcileInFlightRef.current) return;
+    if (mutateInFlightRef.current) return;
+    reconcileInFlightRef.current = true;
+    setReconciling(true);
     let cancelled = false;
     (async () => {
       try {
@@ -117,6 +136,12 @@ export function CartShell({
       } catch {
         // Display-only recovery; a transient failure just leaves the stale
         // cookie for the next cart view or mutation.
+      } finally {
+        reconcileInFlightRef.current = false;
+        // Reset unconditionally: on an unmounted component this is a no-op,
+        // and it must never leave the controls disabled if a deps-change
+        // cleanup cancelled the dispatch but the request still completed.
+        setReconciling(false);
       }
     })();
     return () => {
@@ -129,8 +154,9 @@ export function CartShell({
   }
 
   function changeQuantity(sku: string, name: string, next: number) {
-    if (pending || next < 1 || next > CART_MAX_QTY) return;
+    if (pending || reconciling || next < 1 || next > CART_MAX_QTY) return;
     startTransition(async () => {
+      mutateInFlightRef.current = true;
       try {
         const result = await setCartItemQuantityAction(sku, next);
         if (result.ok) {
@@ -142,13 +168,16 @@ export function CartShell({
         }
       } catch {
         notify(t('cart.updateError'));
+      } finally {
+        mutateInFlightRef.current = false;
       }
     });
   }
 
   function removeLine(sku: string, name: string) {
-    if (pending) return;
+    if (pending || reconciling) return;
     startTransition(async () => {
+      mutateInFlightRef.current = true;
       try {
         const result = await removeCartItemAction(sku);
         if (result.ok) {
@@ -163,13 +192,16 @@ export function CartShell({
         }
       } catch {
         notify(t('cart.updateError'));
+      } finally {
+        mutateInFlightRef.current = false;
       }
     });
   }
 
   function clearCart() {
-    if (pending) return;
+    if (pending || reconciling) return;
     startTransition(async () => {
+      mutateInFlightRef.current = true;
       try {
         const result = await emptyCartAction();
         if (result.ok) {
@@ -178,6 +210,8 @@ export function CartShell({
         }
       } catch {
         notify(t('cart.updateError'));
+      } finally {
+        mutateInFlightRef.current = false;
       }
     });
   }
@@ -197,7 +231,7 @@ export function CartShell({
           <button
             type="button"
             onClick={clearCart}
-            disabled={pending}
+            disabled={pending || reconciling}
             data-testid="cart-empty-cart"
             className="text-xs text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-lacquer-700"
           >
@@ -243,9 +277,12 @@ export function CartShell({
         <>
           <ul className="flex flex-col gap-3" data-testid="cart-items">
             {lines.map((line) => {
-              const decrementDisabled = pending || line.effectiveQty <= 1;
+              const decrementDisabled = pending || reconciling || line.effectiveQty <= 1;
               const incrementDisabled =
-                pending || line.effectiveQty >= line.inventory || line.effectiveQty >= CART_MAX_QTY;
+                pending ||
+                reconciling ||
+                line.effectiveQty >= line.inventory ||
+                line.effectiveQty >= CART_MAX_QTY;
               return (
                 <li
                   key={line.sku}
@@ -306,7 +343,7 @@ export function CartShell({
                       <button
                         type="button"
                         onClick={() => removeLine(line.sku, line.productName)}
-                        disabled={pending}
+                        disabled={pending || reconciling}
                         data-testid={`cart-remove-${line.sku}`}
                         className="text-xs text-lacquer-700 underline decoration-lacquer-200 underline-offset-2 hover:text-lacquer-800"
                       >

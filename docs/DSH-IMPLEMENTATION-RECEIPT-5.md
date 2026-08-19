@@ -221,3 +221,53 @@ Verification (CI-equivalent locally on Node 22, matching Node 24 results):
 - `pnpm e2e` — 96 Playwright tests pass (2 projects × 48), including the previously flaky
   `server revalidation: stock clamp, price change, and unpublish removal` and the three
   reconciliation journeys (expired cleanup, unpublished prune, persisted clamp).
+
+## Repair — review reply on head `273d657` (2026-08-19)
+
+The agent review blocked head `273d657` with one **[P1] product-pr** finding:
+
+**Request local cookie guard cannot prevent reconciliation clobber**
+(`src/lib/cart-actions.ts:138`) — `cookies()` only reads the cookie snapshot
+attached to this Server Action request. When mount reconciliation and a
+remove/quantity action start from the same render, both requests carry the
+expected value, so the compare-and-set guard passes; if the reconciliation
+response is applied last, its `Set-Cookie` overwrites the newer mutation,
+resurrecting a removed item or restoring an old quantity. The shell launched
+reconciliation from an untracked effect while controls remained enabled. The
+review offered "serialize reconciliation with user mutations or persist against
+shared versioned server state".
+
+Root cause: the CAS compares a request-local snapshot, which cannot observe a
+mutation applied after the request was sent; the only stateless fix is to make
+the two writes mutually exclusive in the client.
+
+Fix — serialize reconciliation with user mutations in `src/components/cart-shell.tsx`:
+
+- Added `reconciling` state + `reconcileInFlightRef` / `mutateInFlightRef`
+  refs. The reconcile effect now fires only when the render surfaced something
+  to persist (`needsReconcile`) AND no reconcile is in flight AND no user
+  mutation is in flight (it yields to mutations, which rewrite the cookie from
+  a fresh read; the post-mutation refresh render re-evaluates).
+- All mutation handlers (`changeQuantity`, `removeLine`, `clearCart`) are gated
+  on `reconciling`, and the cart controls are visibly disabled while a
+  reconcile is in flight, so a click is parked instead of racing the reconcile.
+  At most one cookie write is ever in flight per cart view — the reconcile's
+  request-time snapshot can never be ordered under a mutation that shares it.
+- Removed the permanent once-per-view `reconciledRef` lock: because writes are
+  serialized, a later render can safely re-run the reconcile against the newer
+  cookie when it still needs to persist; there is no write/render loop since a
+  reconcile never calls `router.refresh()`.
+- `src/lib/cart-actions.ts` — the compare-and-set guard is retained as the
+  cross-tab backstop; its JSDoc now documents the client serialization layering.
+- New e2e regression test `serialization: a user mutation is never overwritten
+  by background reconciliation` — with REVALIDATE needing a clamp and MAIN being
+  removed in the same view, the removal persists (no resurrection) across
+  reloads and the cookie keeps both the clamp and the removal.
+
+Verification (CI-equivalent locally on Node 22, matching Node 24 results):
+
+- `pnpm i18n:check`, `pnpm lint`, `pnpm typecheck` — pass.
+- `pnpm test` — 153 tests pass (13 files), unchanged.
+- `pnpm build` — passes.
+- `pnpm e2e` — passes (2 projects), including the new serialization regression
+  and the existing reconciliation / revalidation journeys.

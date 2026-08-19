@@ -281,6 +281,64 @@ test.describe('cart — full add-to-cart journey per locale', () => {
     }
   });
 
+  test('serialization: a user mutation is never overwritten by background reconciliation', async ({ page }) => {
+    // Cart holds MAIN (qty 1) and REVALIDATE (qty 2). Dropping REVALIDATE stock
+    // to 1 makes this cart view NEED reconciliation (REVALIDATE clamps to 1)
+    // while the shopper removes MAIN in the same view. Reconciliation and user
+    // mutations are serialized (mutually exclusive, ADR-0007): the reconcile
+    // write and the remove write can never race, so removing MAIN must never be
+    // resurrected by the background reconcile, and the reconcile's clamp must
+    // not be undone.
+    const assertMainGone = async () => {
+      await expect(page.getByTestId('cart-line').filter({ hasText: CART_SKU_MAIN })).toHaveCount(0);
+      const persisted = await cartCookieItems(page);
+      expect(persisted.map((line) => line.sku)).toEqual([CART_SKU_REVALIDATE]);
+      expect(persisted.find((line) => line.sku === CART_SKU_REVALIDATE)?.qty).toBe(1);
+    };
+
+    await page.goto('/en/products/e2e-cart-primary');
+    await page.getByTestId('add-to-cart').click();
+    await expect(page.getByTestId('cart-count')).toHaveText('1');
+    await page.goto('/en/products/e2e-cart-revalidate');
+    await page.getByTestId('add-to-cart').click();
+    await expect(page.getByTestId('cart-count')).toHaveText('2');
+    await page.goto('/en/cart');
+    await page.getByTestId(`cart-qty-increase-${CART_SKU_REVALIDATE}`).click();
+    await expect(page.getByTestId(`cart-qty-${CART_SKU_REVALIDATE}`)).toHaveText('2');
+
+    try {
+      await setVariantInventory(CART_SKU_REVALIDATE, 1);
+      await page.reload();
+      // This view needs reconciliation: REVALIDATE is clamped to 1 and flagged,
+      // while MAIN remains removable. The cart controls park the click until the
+      // in-flight reconcile finishes (serialized), so the remove lands on top of
+      // the persisted clamp and is never reverted by a racing reconcile write.
+      await expect(page.getByTestId(`cart-insufficient-stock-${CART_SKU_REVALIDATE}`)).toBeVisible();
+      await expect(page.getByTestId(`cart-qty-${CART_SKU_REVALIDATE}`)).toHaveText('1');
+      await page.getByTestId(`cart-remove-${CART_SKU_MAIN}`).click();
+      await expect(page.getByTestId('cart-line').filter({ hasText: CART_SKU_MAIN })).toHaveCount(0);
+      // The cookie persists the reconcile's clamp AND the user's removal.
+      await expect.poll(async () => (await cartCookieItems(page)).map((line) => line.sku)).toEqual([
+        CART_SKU_REVALIDATE,
+      ]);
+      await expect
+        .poll(
+          async () =>
+            (await cartCookieItems(page)).find((line) => line.sku === CART_SKU_REVALIDATE)?.qty ?? 0,
+        )
+        .toBe(1);
+
+      // Across a reload, neither the removed MAIN nor the old un-clamped
+      // quantity resurrects.
+      await page.reload();
+      await assertMainGone();
+    } finally {
+      await setProductPublished('e2e-cart-revalidate', true);
+      await setVariantInventory(CART_SKU_REVALIDATE, 10);
+      await setVariantPrice(CART_SKU_REVALIDATE, 15000);
+    }
+  });
+
   test('server revalidation: stock clamp, price change, and unpublish removal', async ({ page }) => {
     // Start with qty 2 of the ¥150.00 revalidation variant. Wait on the badge
     // after adding so the in-flight server action has persisted before we

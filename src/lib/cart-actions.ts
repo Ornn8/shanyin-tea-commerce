@@ -119,14 +119,21 @@ export interface CartReconcileResult {
  * every cart view. All writes go through this server action (Next.js disallows
  * cookie mutation during a Server Component render).
  *
- * The write is compare-and-set guarded: the cart page passes the exact decoded
- * cookie value this render was built from (`expectedCookieValue`); if the
- * cookie has since been rewritten by a user mutation (or another tab), the
- * action skips the write and reports no change, so a background reconcile can
- * never clobber a newer mutation — it cannot resurrect a removed item or undo
- * a new quantity. The cart shell additionally only calls this action when the
- * render actually surfaced something to persist (expired/void, dropped line,
- * or a stock clamp), so an untouched render issues no competing write at all.
+ * Two layers keep this from fighting a newer user action:
+ *
+ *  1. The cart shell SERIALIZES this action against user mutations (ADR-0007):
+ *     the reconcile never starts while a mutation is in flight, the cart
+ *     controls are disabled while a reconcile is in flight, and this action
+ *     only fires when the render actually surfaced something to persist
+ *     (expired/void, dropped line, or a stock clamp), so an untouched render
+ *     issues no competing write at all. At most one cookie write is ever in
+ *     flight per cart view, so the request-time cookie snapshot cannot be
+ *     ordered under a mutation that shares it.
+ *  2. The write is still compare-and-set as a backstop: the cart page passes
+ *     the exact decoded cookie value this render was built from
+ *     (`expectedCookieValue`); if the cookie differs by the time this request
+ *     is processed (e.g. a concurrent tab rewrote it), the action skips the
+ *     write and reports no change, so a stale snapshot can never win.
  */
 export async function reconcileCartAction(
   expectedCookieValue?: string | null,
