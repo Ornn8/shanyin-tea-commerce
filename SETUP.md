@@ -141,9 +141,12 @@ unpublish removal), a stock-capped add reporting the shortage instead of a false
 expired-cart notice, and keyboard/live-region/focus behavior with long labels (Issue #5,
 ADR-0007), and the checkout journeys (`e2e/checkout.spec.ts`, Issue #6, ADR-0008) complete one
 simulated purchase and order lookup in every locale (cart → checkout with fake `@example.test`
-data → simulated payment → confirmation with the once-only lookup credential → credential
+data → simulated payment → confirmation showing the lookup credential → credential
 lookup), assert locale switching changes copy only (never totals/order number/state), and
 redact artifacts (no screenshots or URLs ever contain the credential or real personal data).
+The checkout-recovery journeys (`e2e/checkout-recovery.spec.ts`) prove that a terminal
+payment failure releases the submission key so the retry creates a fresh order, and that
+re-entering payment on an already-paid order still clears the purchased cart lines.
 The cart unit suite (`tests/unit/cart.test.ts`) covers the signed cookie model
 (tamper/expiry) and shipping boundaries; `tests/integration/cart.test.ts` covers revalidation
 and the bounded, atomic service mutations — including an add that cannot grow the line

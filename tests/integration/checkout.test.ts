@@ -26,7 +26,7 @@ import {
   resolveCheckoutLines,
 } from '@/lib/order-service';
 import { buildSimulatedEvent } from '@/lib/simulated-gateway';
-import { generateLookupCredential, hashLookupCredential } from '@/lib/order-credentials';
+import { deriveLookupCredential, generateLookupCredential, hashLookupCredential } from '@/lib/order-credentials';
 
 const hasDb = Boolean(process.env.DATABASE_URL);
 const describeDb = hasDb ? describe : describe.skip;
@@ -223,19 +223,63 @@ describeDb('checkout & payments (ADR-0008)', () => {
       expect(first.replay).toBe(false);
       expect(first.credential).toBeDefined();
 
-      // Replay the SAME submission (retry / double-click): same order, no new
-      // credential (issued exactly once), no duplicate personal data.
+      // Replay the SAME submission (retry / double-click): same order, the SAME
+      // credential (it is derived deterministically from the key, so a lost
+      // first response still recovers it), no duplicate personal data, and
+      // exactly one order row.
       const replay = await createOrder(input);
       expect(replay.replay).toBe(true);
       expect(replay.orderId).toBe(first.orderId);
       expect(replay.orderNumber).toBe(first.orderNumber);
-      expect(replay.credential).toBeUndefined();
+      expect(replay.credential).toBe(first.credential);
+      expect(replay.credential).toBe(deriveLookupCredential(input.submissionKey));
 
-      // Exactly one order row exists for the submission key, and the original
-      // credential still resolves to it.
+      // The original (and replayed) credential still resolves to the order.
       expect(await prisma.order.count({ where: { submissionKey: input.submissionKey } })).toBe(1);
       const identity = await findOrderIdentityByCredential(first.credential as string);
       expect(identity?.orderId).toBe(first.orderId);
+      createdOrderIds.push(first.orderId);
+    });
+
+    it('recovers from a lost first create response: replay returns the SAME credential and payment proceeds', async () => {
+      const initial = await inventoryOf(SKU_MAIN);
+      const resolved = await resolveCheckoutLines([item(SKU_MAIN, 1)]);
+      const shipping = estimateShipping(resolved.subtotalCents);
+      const input = {
+        ...CONTACT,
+        submissionKey: uniqueSubmissionKey(),
+        lines: resolved.lines,
+        subtotalCents: resolved.subtotalCents,
+        shippingFeeCents: shipping.feeCents,
+        totalCents: resolved.subtotalCents + shipping.feeCents,
+      };
+
+      // The first submission creates the order (PENDING) — but the browser
+      // never receives the response, so it has no ticket/credential yet.
+      const first = await createOrder(input);
+      expect(first.replay).toBe(false);
+      expect(first.credential).toBeDefined();
+      expect(await prisma.order.count({ where: { submissionKey: input.submissionKey } })).toBe(1);
+
+      // The shopper replays the submission: the server can only ever store the
+      // hash, so it MUST hand back the SAME derived credential (never a blank
+      // one) for the newly created pending order to be payable.
+      const replay = await createOrder(input);
+      expect(replay.replay).toBe(true);
+      expect(replay.credential).toBe(first.credential);
+      expect(await prisma.order.count({ where: { submissionKey: input.submissionKey } })).toBe(1);
+
+      // Payment authorizes with the recovered credential — exactly one order,
+      // exactly one stock decrement.
+      const identity = await findOrderIdentityByCredential(replay.credential as string);
+      expect(identity?.orderId).toBe(first.orderId);
+      const paid = await applyGatewayEvent(
+        buildSimulatedEvent({ orderId: identity!.orderId, intentId: identity!.providerIntentId }),
+      );
+      expect(paid.applied).toBe(true);
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: first.orderId } })).status).toBe('PAID');
+      expect(await prisma.order.count({ where: { submissionKey: input.submissionKey } })).toBe(1);
+      expect(await inventoryOf(SKU_MAIN)).toBe(initial - 1);
       createdOrderIds.push(first.orderId);
     });
 

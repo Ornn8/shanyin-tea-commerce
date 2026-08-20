@@ -7,8 +7,10 @@
  * - `createCheckout` validates the contact/shipping form server-side, re-reads
  *   the signed cart as server truth (prices/stock are NEVER client-supplied),
  *   and persists a PENDING order — returning the high-entropy lookup credential
- *   to the shopper exactly once. Creation is idempotent per the client
- *   submission key: a replayed submission returns the existing order.
+ *   to the shopper. Creation is idempotent per the client submission key: a
+ *   replayed submission returns the existing order with the SAME (deterministically
+ *   derived) credential, so a lost first response can never lock the shopper
+ *   out of an order the database already created.
  * - `completePayment` drives the deterministic simulated gateway and processes
  *   its SIGNED event through the same replay-safe pipeline as any webhook; a
  *   browser redirect is never payment authority, and completion is idempotent.
@@ -85,7 +87,8 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
     const totalCents = resolved.subtotalCents + shipping.feeCents;
 
     // 4. Persist the immutable PENDING order (ADR-0008). Idempotent: a replay
-    //    of the same submission key returns the EXISTING order.
+    //    of the same submission key returns the EXISTING order together with
+    //    its SAME derived credential, so payment can always authorize it.
     const created = await createOrder({
       ...validation.values,
       submissionKey,
@@ -127,39 +130,48 @@ export type CompletePaymentResult =
  * SIGNED event through the replay-safe pipeline. Idempotent: re-invoking with
  * the same credential converges on the order's current status (paid → paid,
  * failed → failed) and can never create a duplicate order or double-decrement
- * stock. On success the cart cookie is cleared (the order is now the record).
+ * stock.
+ *
+ * WHATEVER path concludes PAID, the purchased cart cookie is cleared: the order
+ * is now the record, so a re-entrant call after a lost response (whose
+ * Set-Cookie never reached the browser) still removes the purchased lines and
+ * can never leave them in the cart for a duplicate checkout.
  */
 export async function completePayment(credential: string, locale: LocaleId): Promise<CompletePaymentResult> {
   try {
     const identity = await findOrderIdentityByCredential(credential);
     if (!identity) return { ok: false, code: 'not-found' };
 
+    // Resolve the authoritative order view, applying the verified "succeeded"
+    // event when the order is still PENDING.
+    let order: OrderView;
     if (identity.status === 'PAID') {
-      const order = await getOrderViewById(identity.orderId, locale);
-      return order ? { ok: true, status: order.status, order, credential } : { ok: false, code: 'unexpected' };
+      const existing = await getOrderViewById(identity.orderId, locale);
+      if (!existing) return { ok: false, code: 'unexpected' };
+      order = existing;
+    } else if (identity.status !== 'PENDING') {
+      const existing = await getOrderViewById(identity.orderId, locale);
+      if (!existing) return { ok: false, code: 'unexpected' };
+      order = existing;
+    } else {
+      const wire = buildSimulatedEvent({
+        orderId: identity.orderId,
+        intentId: identity.providerIntentId,
+      });
+      await applyGatewayEvent(wire);
+      const current = await getOrderViewById(identity.orderId, locale);
+      if (!current) return { ok: false, code: 'unexpected' };
+      order = current;
     }
-    if (identity.status !== 'PENDING') {
-      const order = await getOrderViewById(identity.orderId, locale);
-      return order ? { ok: true, status: order.status, order, credential } : { ok: false, code: 'unexpected' };
-    }
 
-    const wire = buildSimulatedEvent({
-      orderId: identity.orderId,
-      intentId: identity.providerIntentId,
-    });
-    const result = await applyGatewayEvent(wire);
-
-    const order = await getOrderViewById(identity.orderId, locale);
-    if (!order) return { ok: false, code: 'unexpected' };
-
-    if (result.ok && result.applied && result.reason === 'paid') {
+    // Any PAID conclusion clears the purchased lines from the cart — whether
+    // payment just committed in this call or had committed before a lost
+    // response — so a paid order's lines can never be checked out again.
+    if (order.status === 'PAID') {
       const store = await cookies();
       store.delete(CART_COOKIE);
-      return { ok: true, status: 'PAID', order, credential };
     }
 
-    // Idempotent convergence for any other outcome (already terminal, replay,
-    // stock shortage) — report the current authoritative status.
     return { ok: true, status: order.status, order, credential };
   } catch (error) {
     console.error('completePayment failed', error);

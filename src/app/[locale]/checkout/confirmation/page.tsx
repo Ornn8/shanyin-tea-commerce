@@ -13,7 +13,8 @@ interface ConfirmationPageProps {
  * credential held in sessionStorage on every render/refresh — never trusting
  * the last navigation — and shows the order ONLY when the stored order is
  * `paid` (state driven by a verified gateway event, not by this page existing).
- * The high-entropy lookup credential is shown here exactly once.
+ * The high-entropy lookup credential is shown so the shopper can save it; a
+ * replayed/re-entered submission recovers the SAME credential (ADR-0008).
  */
 export default async function ConfirmationPage({ params }: ConfirmationPageProps) {
   const { locale: raw } = await params;

@@ -41,6 +41,10 @@ jobs:
       # Signs the deterministic simulated payment gateway events (Issue #6,
       # ADR-0008). Test-mode only — it can never enable a live charge.
       PAYMENT_SIM_SECRET: ci-shanyin-sim-payment-secret-4f2d1a77c3f8-change-r6
+      # Derives each order's lookup credential from its submission key
+      # (ADR-0008) so a replay recovers the same credential. AUTH_SECRET is the
+      # fallback; pinned here to keep derivation stable across environments.
+      ORDER_LOOKUP_SECRET: ci-shanyin-order-lookup-secret-4f2d1a77c3f8-change-r6
     steps:
       - name: Checkout
         uses: actions/checkout@v4

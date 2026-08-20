@@ -23,7 +23,8 @@ type Phase =
 /**
  * Confirmation shell (Issue #6, ADR-0008). Re-validates by credential every
  * render; a refreshed page stays correct without trusting navigation or the
- * URL. Renders the paid order with its once-only lookup credential, or the
+ * URL. Renders the paid order with its high-entropy lookup credential (the
+ * SAME credential is recoverable on a replayed submission, ADR-0008), or the
  * matching localized state for pending / non-paid / no-recent.
  */
 export function ConfirmationShell({ locale }: ConfirmationShellProps) {

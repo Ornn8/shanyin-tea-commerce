@@ -16,7 +16,7 @@ import {
  *  - one complete simulated purchase per locale: product → cart → checkout
  *    (minimum contact + shipping fields, server-validated, localized copy) →
  *    payment page driven by a VERIFIED gateway event (no browser redirect is
- *    payment authority) → confirmation showing the once-only high-entropy
+ *    payment authority) → confirmation showing the recoverable high-entropy
  *    lookup credential → order lookup by that credential → the same order;
  *  - totals/identifiers/order state are stored server-side and never change on
  *    a locale switch (copy changes only);

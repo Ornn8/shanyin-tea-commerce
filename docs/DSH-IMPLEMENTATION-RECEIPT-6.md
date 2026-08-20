@@ -52,20 +52,29 @@
 - **Secure customer lookup (`src/lib/order-credentials.ts`,
   `src/app/[locale]/orders/lookup/page.tsx`,
   `src/components/order-lookup-shell.tsx`).** The high-entropy credential
-  (256-bit CSPRNG, base64url) is stored only as a SHA-256 hash
-  (`Order.lookupHash`), never in plaintext, and is shown to the shopper exactly
-  once at confirmation; it travels through this tab's sessionStorage (never a
-  URL), and `/…/orders/lookup` returns a uniform "not found" for any wrong,
-  missing, or malformed credential — order existence and personal data are not
-  enumerable through order numbers, emails, or URLs.
+  (256-bit, base64url) is stored only as a SHA-256 hash
+  (`Order.lookupHash`), never in plaintext, and is DERIVED deterministically
+  from the client submission key (HMAC-SHA256 under `ORDER_LOOKUP_SECRET`,
+  which falls back to `AUTH_SECRET`) — so a replay after a lost first response
+  recovers the SAME credential and can always authorize the order's payment,
+  while the database still holds only the hash; it is shown to the shopper at
+  confirmation and travels through this tab's sessionStorage (never a URL).
+  `/…/orders/lookup` returns a uniform "not found" for any wrong, missing, or
+  malformed credential — order existence and personal data are not enumerable
+  through order numbers, emails, or URLs.
 - **Explicit failure/retry + locale-stable presentation.** A failed payment is
   a terminal `FAILED` state with zero stock movement and a deterministic retry
-  path (a new order from the kept cart — the cart cookie is only cleared on
-  success). Confirmation and lookup render the stored order immutably; a locale
-  switch changes copy only, never totals, identifiers, or payment state.
+  path: the kept cart cookie is only cleared on success, and a terminal failure
+  RELEASES the checkout submission idempotency key so the retry starts a FRESH
+  order from the kept cart instead of replaying the terminal one. ANY paid
+  conclusion — including a re-entrant payment step after a lost response that
+  committed the order but never delivered the Set-Cookie — clears the
+  purchased cart lines, so they can never be checked out again. Confirmation
+  and lookup render the stored order immutably; a locale switch changes copy
+  only, never totals, identifiers, or payment state.
 - **Validation/docs/CI:** `.env.example` and `.github/workflows/ci.yml` gain
-  `PAYMENT_SIM_SECRET` (and document the optional Stripe vars), SETUP.md /
-  README.md / PRODUCT.md are updated, a new ADR
+  `PAYMENT_SIM_SECRET` and `ORDER_LOOKUP_SECRET` (and document the optional
+  Stripe vars), SETUP.md / README.md / PRODUCT.md are updated, a new ADR
   (`docs/adr/0008-checkout-orders-and-payments.md`) records the design, and
   this receipt documents the model + reasoning.
 
@@ -84,24 +93,29 @@
   unit suites `order-status` (explicit transitions, terminal guards),
   `checkout-validation`, `payment-gateway` (sign/verify, tamper rejection,
   deterministic replay-safe event ids, Stripe v1 signature verification and
-  test-mode guard), `order-credentials` (entropy/hash/non-enumerability), and
+  test-mode guard), `order-credentials` (entropy/hash/non-enumerability/replay
+  recovery derivation), and
   `order-view` (locale snapshot picking, totals invariance), plus the new
   `tests/integration/checkout.test.ts` covering: server-owned totals (stale
   cart price), immutable snapshots, signature rejection, duplicate events,
   event reordering (both directions), the concurrent last-unit purchase (exactly
   one of two competing payments wins; inventory never negative), payment
-  failure + retry, paid→refunded, and credential-only non-enumerable lookup.
+  failure + retry, paid→refunded, idempotent creation with credential
+  RECOVERY on replay (a lost first response still yields the same payable
+  credential), and credential-only non-enumerable lookup.
 - `pnpm build` — production build (dynamic checkout pages; no DB access at
   build time) — see run below.
 - `pnpm e2e` — new `e2e/checkout.spec.ts` across desktop (1440×900) and mobile
   (390×844): one complete simulated purchase + order lookup per locale
   (cart → checkout with fake `@example.test` data → payment → confirmation
-  with the once-only credential → credential lookup), locale-switch invariance
-  of totals/order number/status, credential never in the URL, unknown/
-  malformed credentials surfacing the uniform not-found, and server-side
-  localized field validation — with no screenshots of any page that shows the
-  credential or personal data (redaction policy), and e2e orders cleaned from
-  the database in teardown.
+  showing the recoverable credential → credential lookup), locale-switch
+  invariance of totals/order number/status, credential never in the URL,
+  unknown/malformed credentials surfacing the uniform not-found, and
+  server-side localized field validation — with no screenshots of any page that
+  shows the credential or personal data (redaction policy), and e2e orders
+  cleaned from the database in teardown. `e2e/checkout-recovery.spec.ts` adds
+  the recovery journeys (terminal failure releases the submission key → fresh
+  retry order; re-entering an already-paid order clears the purchased cart).
 
 ## Acceptance mapping
 
@@ -130,10 +144,12 @@
   in the URL, e2e orders cleaned).
 - Receipt identifies `deepseek-v4-flash` with `max` reasoning, no fallback: done.
 
-## Review repair (PR #36, review-repair run)
+## Review repair (PR #36, review-repair runs)
 
-Two P1 findings from the pull-request review were fixed on this branch without
-changing the public UI:
+### Round 1 (head `b2e2e46`)
+
+Two P1 findings from the first pull-request review were fixed on this branch
+without changing the public UI:
 
 1. **Serialize payment transitions per order.** `applyGatewayEvent` previously
    read the order status OUTSIDE its transaction and updated the order by id
@@ -152,24 +168,59 @@ changing the public UI:
    client submission key (`Order.submissionKey`, UNIQUE) that the checkout form
    generates once per cart (pinned in `sessionStorage`, rebound by cart
    fingerprint, sent as a hidden field). A replayed submission returns the
-   EXISTING order (`replay: true`, no new credential) instead of creating a
-   duplicate order + duplicate personal data for one checkout. New integration
-   coverage: same key → same order / one row / credential issued once; distinct
-   keys → distinct orders; a unit test for the key shape check.
+   EXISTING order (`replay: true`) instead of creating a duplicate order +
+   duplicate personal data for one checkout. New integration coverage: same key
+   → same order / one row; distinct keys → distinct orders; a unit test for the
+   key shape check.
+
+### Round 2 (exact head `dd0d13e`)
+
+Three P1 checkout-recovery findings from the exact-head review were fixed
+without changing the public UI:
+
+1. **Replay must recover the SAME credential, not lose it.** Finding: if the
+   first create response is lost after the insert, an idempotent replay
+   returned NO credential (the server stores only the SHA-256 hash), leaving
+   the checkout form to write an empty credential — payment could not authorize
+   the created PENDING order. Fix: the lookup credential is now DERIVED
+   deterministically from the submission key (HMAC-SHA256 under
+   `ORDER_LOOKUP_SECRET`, fallback `AUTH_SECRET`); a replay returns the SAME
+   credential, so a lost first response recovers it and payment proceeds (still
+   one order row, one credential). Integration coverage: replay returns the
+   identical credential and a payment succeeds; unit coverage for the
+   deterministic derivation.
+2. **A terminal failure must release the submission key so retry starts a fresh
+   order.** Finding: only the PAID branch cleared the submission ref; a failed /
+   expired / cancelled / stock-shortage order kept the key pinned to the
+   retained cart, so every retry replayed the terminal order forever. Fix:
+   `payment-shell` clears the submission idempotency key on ANY terminal
+   non-PAID outcome, so the next checkout from the kept cart rotates to a fresh
+   key and creates a NEW order (ADR-0008's deterministic retry path).
+3. **Any PAID conclusion must clear the purchased cart lines.** Finding: the
+   `already PAID` early return skipped the cart-cookie deletion, so a paid
+   replay whose response was lost left the purchased lines in the cart for a
+   possible duplicate checkout. Fix: `completePayment` clears the cart cookie
+   on EVERY PAID conclusion — a fresh payment and a re-entrant already-paid
+   call alike.
 
 These are captured in ADR-0008 and covered by
-`tests/integration/checkout.test.ts` + `tests/unit/checkout-validation.test.ts`.
+`tests/integration/checkout.test.ts` (credential recovery on replay),
+`tests/unit/order-credentials.test.ts` (deterministic derivation), and
+`e2e/checkout-recovery.spec.ts` (failed-terminal retry creates a fresh order;
+re-entering an already-paid order clears the cart).
 
 With the repair, the local verification reran clean on the new diff:
 `pnpm i18n:check`, `pnpm lint`, `pnpm typecheck`, `pnpm build`, and
-`pnpm test` — **213 tests pass** (20 files; the checkout file grew from 373 to
-490 lines with the new concurrency + idempotency coverage) — plus the complete
-checkout Playwright journey per locale on desktop and mobile.
+`pnpm test` — all suites pass — plus the complete checkout Playwright journey
+per locale on desktop and mobile and the new recovery journeys.
 
 ## Security hardening (design notes)
 
 - The lookup credential is stored only as a SHA-256 hash: a database leak is
-  not replayable for order reads, and the plaintext is shown once.
+  not replayable for order reads. It is derived deterministically from the
+  submission key (server secret required), so only a holder of both the client
+  submission key and the server secret can derive it — the plaintext is shown
+  to the shopper at confirmation and never persisted.
 - The credential never enters a URL, referrer, or server log; it rides in
   sessionStorage and confirmation re-validates by credential per render.
 - Live charges are impossible: the Stripe adapter only activates with

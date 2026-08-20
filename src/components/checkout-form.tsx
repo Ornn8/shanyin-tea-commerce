@@ -61,8 +61,9 @@ const FIELDS: Array<{ id: CheckoutField; name: string; labelKey: MessageKey; tes
  * Idempotent by client submission key: the key is generated once per checkout
  * (bound to this cart's fingerprint and persisted in sessionStorage, so a
  * double-click, a browser retry, or a refresh before paying reuses it). The
- * server returns the EXISTING order for a replayed key, and the still-held
- * ticket's credential is kept so the flow never silently discards it.
+ * server returns the EXISTING order for a replayed key together with the SAME
+ * derived credential, so even a lost first response never leaves the flow
+ * without a credential that payment needs.
  */
 export function CheckoutForm({ locale, lines, subtotalCents, shippingFeeCents, totalCents, cartFingerprint }: CheckoutFormProps) {
   const t = createT(locale);
@@ -84,9 +85,11 @@ export function CheckoutForm({ locale, lines, subtotalCents, shippingFeeCents, t
     async (_prev, formData) => {
       const result = await createCheckout(formData);
       if (result.ok) {
-        // Merge rather than overwrite: an idempotent replay (which carries no
-        // new credential) must never discard the credential the FIRST
-        // submission issued for this same order.
+        // Merge rather than overwrite as a safety net: an idempotent replay of
+        // the SAME submission key returns the SAME (derived) credential, so a
+        // lost first response — where this tab has no ticket yet — still ends
+        // up with a working credential and never with a blank one that would
+        // leave payment unable to authorize the order (recovery finding #1).
         const existing = readOrderTicket();
         writeOrderTicket({
           credential: result.credential ?? existing?.credential ?? '',

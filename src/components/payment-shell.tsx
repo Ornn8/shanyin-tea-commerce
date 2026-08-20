@@ -66,6 +66,15 @@ export function PaymentShell({ locale }: PaymentShellProps) {
           router.replace(`/${locale}/checkout/confirmation`);
           return;
         }
+
+        // A terminal non-PAID outcome (failed / expired / cancelled / stock
+        // shortage) keeps the cart for retry but must RELEASE the submission
+        // idempotency key: the key is pinned to this cart's fingerprint, so if
+        // it were kept, the retry would submit the SAME key and replay this
+        // terminal order forever (recovery finding #2). A fresh key lets the
+        // next checkout start a NEW order from the kept cart (ADR-0008: failure
+        // is a real state with a deterministic retry path).
+        clearCheckoutSubmissionRef();
         setPhase({ kind: 'failed', order: result.order });
       } catch {
         setPhase({ kind: 'unexpected' });

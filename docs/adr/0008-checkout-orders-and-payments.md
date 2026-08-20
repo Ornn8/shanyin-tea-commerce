@@ -37,10 +37,13 @@ the six-state machine, integer-CNY totals, contact/shipping, `gateway`, and
 name, localized display-name snapshots for `zh-CN`/`en`/`ja`
 (`nameZhCn`/`nameEn`/`nameJa`), unit price, quantity, subtotal, and currency —
 so catalog copy and prices remain independently editable (ADR-0003) and an
-order's meaning never changes. The high-entropy lookup credential (256-bit
-CSPRNG, base64url) is NEVER stored: only its SHA-256 is persisted
-(`lookupHash`), so a database leak cannot be replayed to fetch orders, and it
-is shown to the shopper exactly once at confirmation.
+order's meaning never changes. The lookup credential (256-bit, base64url) is
+NEVER stored: only its SHA-256 is persisted (`lookupHash`), so a database leak
+cannot be replayed to fetch orders. It is DERIVED deterministically from the
+client submission key (HMAC-SHA256 under `ORDER_LOOKUP_SECRET`, falling back to
+`AUTH_SECRET`), so replaying the same submission after a lost first response
+recovers the SAME credential and payment can always authorize the order; the
+credential is shown to the shopper at confirmation so they can save it.
 
 **Order creation is idempotent per client submission key.** The checkout form
 generates a high-entropy submission key ONCE per cart (pinned in the tab's
@@ -51,8 +54,11 @@ field. `Order.submissionKey` is UNIQUE (migration
 double-click, a browser retry after a network loss, a re-submit after an empty
 response — returns the EXISTING order instead of inserting a duplicate, so one
 checkout submission always means exactly one order and never duplicates
-personal data. The credential is re-issued only once; a replay returns the
-order identity without a credential (the server stores only the hash).
+personal data. Because the credential is a deterministic function of the key, a
+replay returns the SAME credential (never a blank or a different one) — a lost
+first create response can never lock the shopper out of an order the database
+already created, and a new cart rotates to a fresh key/credential that cannot
+collide with an older order.
 
 **Payment state changes only through verified, replay-safe gateway events.**
 `applyGatewayEvent` (`src/lib/order-service.ts`) is the only place payment
@@ -68,7 +74,9 @@ no double-decrement. Only the explicit state machine moves
 `PENDING → PAID|FAILED|EXPIRED|CANCELLED` and `PAID → REFUNDED` (domain
 placeholder); a duplicate, reordered, or contradictory event is a recorded
 no-op that never mutates state or stock. Failure is a real state with a
-deterministic retry path (a new order from the kept cart).
+deterministic retry path (a new order from the kept cart): a terminal
+failure RELEASES the checkout's submission idempotency key, so the retry
+starts a FRESH order from the kept cart instead of replaying the terminal one.
 
 **Every transition SERIALIZES per order.** ALL processing for one order runs
 inside a single transaction that first LOCKS the order row
@@ -99,19 +107,23 @@ and local-viewing is locale-driven presentation over the stored snapshots.
   secrets).
 - Checkout is a multi-step flow: `/…/checkout` (form) → `/…/checkout/payment`
   (drives the deterministic simulated gateway) → `/…/checkout/confirmation`
-  (once-only credential) and `/…/orders/lookup` (credential-only read). On
-  success the cart cookie is cleared; a failed payment keeps the cart for retry.
-  A replayed form submission returns the existing order (idempotent), so a
-  double-click can never create two orders.
+  (recoverable credential shown so the shopper can save it) and
+  `/…/orders/lookup` (credential-only read). ANY paid conclusion clears the
+  cart cookie (the order is the record) — including a re-entrant payment step
+  after a lost response that committed the order but never delivered the
+  Set-Cookie — so purchased lines can never be checked out again. A failed
+  payment keeps the cart for retry AND releases the submission key so the
+  retry creates a fresh order. A replayed form submission returns the existing
+  order (idempotent), so a double-click can never create two orders.
 - CI stays fully deterministic: the simulated gateway always emits a `succeeded`
   event in the happy path, and the integration suite drives `failed`/`expired`/
   `cancelled`/`refunded` plus duplicates and reordering through the same
   pipeline. Live charges are impossible: the Stripe adapter is dormant unless
   test-mode credentials (`sk_test_*` + `whsec_*`) are configured and rejects
   live keys outright.
-- `CART_SECRET`, `AUTH_SECRET`, and now `PAYMENT_SIM_SECRET` are independent
-  secrets; production must rotate them separately and keep the sim secret out
-  of any live deployment.
+- `CART_SECRET`, `AUTH_SECRET`, `PAYMENT_SIM_SECRET`, and
+  `ORDER_LOOKUP_SECRET` are independent secrets; production must rotate them
+  separately and keep the sim secret out of any live deployment.
 - New suites: `tests/unit/order-status.test.ts`,
   `tests/unit/checkout-validation.test.ts`, `tests/unit/payment-gateway.test.ts`,
   `tests/unit/order-credentials.test.ts`, `tests/unit/order-view.test.ts`,

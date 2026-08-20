@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  deriveLookupCredential,
   generateLookupCredential,
   generateOrderNumber,
   hashLookupCredential,
@@ -36,6 +37,24 @@ describe('lookup credentials (high-entropy, hash-only persistence)', () => {
     expect(normalizeLookupCredential('bad credential!')).toBeNull();
     expect(normalizeLookupCredential(42)).toBeNull();
     expect(normalizeLookupCredential('')).toBeNull();
+  });
+
+  it('derives a deterministic 256-bit credential from the submission key (replay recovery)', () => {
+    const key = 'submission-key-abc123';
+    const a = deriveLookupCredential(key);
+    const b = deriveLookupCredential(key);
+    // Same submission key → SAME credential (a lost first response recovers it).
+    expect(a).toBe(b);
+    // Same shape/entropy-class as a random credential (32 bytes → 43 chars).
+    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.from(a, 'base64url').length).toBe(32);
+    // The derived credential still hashes and normalizes like any other.
+    expect(hashLookupCredential(a)).toMatch(/^[a-f0-9]{64}$/);
+    expect(normalizeLookupCredential(a)).toBe(a);
+  });
+
+  it('derives DIFFERENT credentials for DIFFERENT submission keys', () => {
+    expect(deriveLookupCredential('submission-key-one')).not.toBe(deriveLookupCredential('submission-key-two'));
   });
 });
 

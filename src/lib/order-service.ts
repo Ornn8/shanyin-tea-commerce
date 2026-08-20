@@ -8,9 +8,10 @@
  *    is never trusted) and captures per-locale display name snapshots;
  *  - `createOrder` persists an immutable PENDING order (order number,
  *    provider intent, lookup-credential hash only, contact + shipping, and
- *    snapshot order lines) and returns the credential to the shopper once.
+ *    snapshot order lines) and returns the credential to the shopper.
  *    Creation is IDEMPOTENT per client submission key: replaying the same
- *    submission returns the existing order instead of creating a duplicate;
+ *    submission returns the existing order with the SAME (deterministically
+ *    derived) credential, so a lost first create response always recovers;
  *  - `applyGatewayEvent` is the replay-safe payment processor: verify
  *    signature → idempotent apply (unique per-gateway event id, reserved in
  *    the SAME transaction as the atomic stock decrement) → explicit state
@@ -31,7 +32,7 @@ import {
 import type { GatewayEventWire } from '@/lib/simulated-gateway';
 import { verifyGatewaySignature } from '@/lib/simulated-gateway';
 import {
-  generateLookupCredential,
+  deriveLookupCredential,
   generateOrderNumber,
   hashLookupCredential,
   newProviderIntentId,
@@ -201,39 +202,48 @@ export interface CreateOrderInput extends OrderContact {
 export interface CreatedOrder {
   orderId: string;
   orderNumber: string;
-  /** Present ONLY on first creation — the server stores only the SHA-256 hash
-   * and the credential is issued exactly once. Absent on an idempotent replay
-   * (the server cannot and must not re-issue it). */
-  credential?: string;
+  /** The high-entropy lookup credential. It is DERIVED deterministically from
+   * the client submission key, so it is present on first creation AND on every
+   * replay of the same submission — the same credential each time — letting a
+   * shopper whose first create response was lost recover the order and proceed
+   * to payment. Only `sha256(credential)` is stored; the server can never
+   * re-issue a random one. */
+  credential: string;
   /** True when a submission with this key had ALREADY created the order. */
   replay: boolean;
 }
 
 /**
  * Persist a PENDING order and return the high-entropy lookup credential to the
- * shopper (exactly once). Only `sha256(credential)` is stored — the server
- * cannot recover the credential later. Totals are integer CNY cents captured
- * from `resolveCheckoutLines` (server truth); nothing here trusts the client.
+ * shopper. Only `sha256(credential)` is stored — the server cannot recover a
+ * random credential later. Totals are integer CNY cents captured from
+ * `resolveCheckoutLines` (server truth); nothing here trusts the client.
  *
  * Idempotent: the `submissionKey` is a UNIQUE key on `Order`, so a replayed
  * submission (retry after a network loss, a double-click, a re-submit) returns
  * the EXISTING order (`replay: true`) instead of inserting a duplicate — one
- * checkout submission always means exactly one order.
+ * checkout submission always means exactly one order. Because the credential is
+ * a deterministic function of the submission key (`deriveLookupCredential`),
+ * the replay returns the SAME credential, so even a lost first create response
+ * never locks the shopper out of the order (review finding #1).
  */
 export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder> {
-  const credential = generateLookupCredential();
+  // Derive (not roll) the lookup credential from the client submission key: the
+  // SAME key — including a retry after the first response was lost — always
+  // yields the SAME credential, and only its SHA-256 is persisted.
+  const credential = deriveLookupCredential(input.submissionKey);
   const lookupHash = hashLookupCredential(credential);
   const orderNumber = generateOrderNumber();
   const providerIntentId = newProviderIntentId('simulated');
 
   // Idempotent replay fast-path: a submission key that already created an order
-  // returns it without touching the insert.
+  // returns it (with the same derived credential) without touching the insert.
   const already = await prisma.order.findUnique({
     where: { submissionKey: input.submissionKey },
     select: { id: true, orderNumber: true },
   });
   if (already) {
-    return { orderId: already.id, orderNumber: already.orderNumber, replay: true };
+    return { orderId: already.id, orderNumber: already.orderNumber, credential, replay: true };
   }
 
   try {
@@ -277,15 +287,16 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
   } catch (error) {
     if (isUniqueConstraintError(error)) {
       // A unique collision during creation. The freshly randomized keys
-      // (`orderNumber`, `lookupHash`, `providerIntentId`) cannot realistically
-      // collide, so this is an idempotent replay that raced the fast-path read:
-      // resolve the existing order by this submission key and return it.
+      // (`orderNumber`, `providerIntentId`) cannot realistically collide, so
+      // this is an idempotent replay that raced the fast-path read: resolve the
+      // existing order by this submission key and return it (with the same
+      // derived credential).
       const existing = await prisma.order.findUnique({
         where: { submissionKey: input.submissionKey },
         select: { id: true, orderNumber: true },
       });
       if (existing) {
-        return { orderId: existing.id, orderNumber: existing.orderNumber, replay: true };
+        return { orderId: existing.id, orderNumber: existing.orderNumber, credential, replay: true };
       }
     }
     throw error;

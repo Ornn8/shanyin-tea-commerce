@@ -64,7 +64,7 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
 | `/…/cart`                      | Durable anonymous cart: signed cookie, quantities, price snapshots, and a non-binding shipping estimate (no checkout) |
 | `/…/checkout`                  | Pilot checkout: minimum contact + shipping fields, server-owned totals, localized privacy/error copy (ADR-0008) |
 | `/…/checkout/payment`          | Drives the deterministic simulated payment gateway; completion is set by a verified, replay-safe gateway event |
-| `/…/checkout/confirmation`     | Paid-order receipt with the once-only high-entropy lookup credential |
+| `/…/checkout/confirmation`     | Paid-order receipt showing the high-entropy lookup credential (recoverable on replay, ADR-0008) |
 | `/…/orders/lookup`             | Secure customer order lookup — credential-only, not enumerable (ADR-0008) |
 | `/admin/login`                 | Merchant sign-in (public registration disabled)|
 | `/admin/products`              | Merchant product list (protected)              |
@@ -112,8 +112,9 @@ price snapshot is never trusted — the server owns all totals), and persists an
 immutable order with per-locale name snapshots. Order creation is idempotent
 per a client submission key (`Order.submissionKey` is unique): a replayed
 submission — a double-click, a retry after a network loss — returns the
-existing order, so one checkout can never mint two orders or duplicate personal
-data. Payment is driven by a deterministic simulated gateway in CI: the server
+existing order (with the SAME recoverable credential), so one checkout can
+never mint two orders or duplicate personal data. Payment is driven by a
+deterministic simulated gateway in CI: the server
 processes a SIGNED, replay-safe gateway event through one state machine
 (`pending` → `paid`/`failed`/`expired`/`cancelled`, `paid` → `refunded`
 placeholder), reserving the event id in the same transaction as the atomic
@@ -127,10 +128,13 @@ stock shortage can never downgrade a paid order. An optional Stripe test-mode
 adapter (`sk_test_*` + `whsec_*`) maps verified webhook events onto the same
 pipeline; live charges are forbidden. The
 shopper then retrieves the order only through a high-entropy lookup credential
-(only its SHA-256 is stored): the confirmation page shows it once, and
-`/…/orders/lookup` returns a uniform "not found" for any wrong input — order
-existence is not enumerable, and locale switching changes copy only, never
-totals, identifiers, or payment state. See
+(only its SHA-256 is stored — it is derived deterministically from the
+submission key, so a replay after a lost response recovers the same one).
+Any paid conclusion clears the purchased cart lines (the order is the record),
+a failed payment keeps the cart but releases the submission key so the retry
+starts a fresh order, and `/…/orders/lookup` returns a uniform "not found" for
+any wrong input — order existence is not enumerable, and locale switching
+changes copy only, never totals, identifiers, or payment state. See
 [ADR-0008](./docs/adr/0008-checkout-orders-and-payments.md).
 
 ## Scripts
