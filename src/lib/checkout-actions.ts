@@ -34,6 +34,7 @@ import {
   resolveCheckoutLines,
 } from '@/lib/order-service';
 import type { OrderView } from '@/lib/order-view';
+import { prisma } from '@/lib/prisma';
 import { buildSimulatedEvent } from '@/lib/simulated-gateway';
 import { estimateShipping } from '@/lib/shipping-estimate';
 import {
@@ -101,6 +102,7 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
         nameZhCn: line.nameZhCn,
         nameEn: line.nameEn,
         nameJa: line.nameJa,
+        addedAt: line.addedAt,
       })),
       subtotalCents: resolved.subtotalCents,
       shippingFeeCents: shipping.feeCents,
@@ -168,9 +170,12 @@ function serializePaidCleanupMarker(ids: string[]): string {
  * cannot be silently overwritten by a blind whole-cookie delete. A re-entrant
  * call after a lost response (whose Set-Cookie never reached the browser)
  * still removes the purchased lines and can never leave them for a duplicate
- * checkout. An idempotent cleanup marker plus the cart line identity
- * (`addedAt`) ensures a later same-SKU purchase is never mistaken for the
- * previous order's line.
+ * checkout. An idempotent cleanup marker plus the persisted cart line identity
+ * (`OrderLine.sourceAddedAt` vs `CartItem.addedAt`, exact match) ensures a
+ * later same-SKU purchase is never mistaken for the previous order's line —
+ * even when the replacement was created after checkout but before `paidAt`
+ * (review finding 4fc6050: the previous `addedAt > paidAt` comparison is
+ * replaced by exact identity).
  */
 export async function completePayment(credential: string, locale: LocaleId): Promise<CompletePaymentResult> {
   try {
@@ -209,7 +214,11 @@ export async function completePayment(credential: string, locale: LocaleId): Pro
     // committed cart mutation. Idempotency across purchase generations: once an
     // order has been cleaned, a fresh cart item that shares the SKU (added
     // after the original payment) must be preserved — enforced by a persistent
-    // cleanup marker and by binding to the cart line identity (`addedAt`).
+    // cleanup marker and by binding to the persisted cart line identity
+    // (`OrderLine.sourceAddedAt` vs `CartItem.addedAt`, exact match). The
+    // previous `addedAt > paidAt` comparison is removed: a replacement created
+    // after checkout but before `paidAt` (new `addedAt` still < `paidAt`) must
+    // not be deleted (review finding 4fc6050).
     if (order.status === 'PAID') {
       const store = await cookies();
       const markerRaw = store.get(PAID_CART_CLEANUP_COOKIE)?.value;
@@ -221,35 +230,77 @@ export async function completePayment(credential: string, locale: LocaleId): Pro
       const raw = store.get(CART_COOKIE)?.value;
       const cartState = parseCart(raw);
       if (cartState.status === 'ok' && cartState.items.length > 0) {
-        const purchasedQtyBySku = new Map<string, number>();
-        for (const line of order.lines) {
-          purchasedQtyBySku.set(line.sku, (purchasedQtyBySku.get(line.sku) ?? 0) + line.quantity);
+        // Resolve the exact purchased generation per SKU from the persisted
+        // order lines (sourceAddedAt). Falls back to the view's lines when the
+        // DB row is unavailable (defensive).
+        const purchasedBySku = new Map<string, { qty: number; sourceAddedAt: bigint | number | null }>();
+        let persistedLines: Array<{ sku: string; quantity: number; sourceAddedAt: bigint | null }> | null = null;
+        try {
+          const persisted = await prisma.order.findUnique({
+            where: { id: order.orderId },
+            select: { lines: { select: { sku: true, quantity: true, sourceAddedAt: true } } },
+          });
+          persistedLines = persisted?.lines ?? null;
+        } catch {
+          persistedLines = null;
         }
-        const hasPurchasedInCart = cartState.items.some((item) => purchasedQtyBySku.has(item.sku));
+        if (persistedLines && persistedLines.length > 0) {
+          for (const l of persistedLines) {
+            const prev = purchasedBySku.get(l.sku);
+            if (prev) prev.qty += l.quantity;
+            else purchasedBySku.set(l.sku, { qty: l.quantity, sourceAddedAt: l.sourceAddedAt });
+          }
+        } else {
+          for (const line of order.lines) {
+            const prev = purchasedBySku.get(line.sku);
+            if (prev) prev.qty += line.quantity;
+            else purchasedBySku.set(line.sku, { qty: line.quantity, sourceAddedAt: null });
+          }
+        }
+
+        const hasPurchasedInCart = cartState.items.some((item) => purchasedBySku.has(item.sku));
         if (hasPurchasedInCart) {
-          const cutoffMs = order.paidAt ? new Date(order.paidAt).getTime() : new Date(order.createdAt).getTime();
           const remaining: CartItem[] = [];
           for (const item of cartState.items) {
-            // A cart line created AFTER the order was paid is a NEW shopping
-            // generation (e.g. shopper re-added the same SKU after the first
-            // purchase cleared the cart). It must never be treated as the old
-            // purchased line, even though the SKU matches — the `addedAt`
-            // identity binds the cleanup to the original generation.
-            if (Number.isFinite(item.addedAt) && Number.isFinite(cutoffMs) && item.addedAt > cutoffMs) {
+            const purchased = purchasedBySku.get(item.sku);
+            if (purchased === undefined) {
               remaining.push(item);
               continue;
             }
-            const purchasedQty = purchasedQtyBySku.get(item.sku);
-            if (purchasedQty === undefined) {
-              remaining.push(item);
-            } else {
-              const remainder = item.qty - purchasedQty;
-              if (remainder > 0) {
-                remaining.push({ ...item, qty: remainder });
+            // Exact generation match: a cart line whose addedAt does NOT equal
+            // the persisted sourceAddedAt is a NEW generation (e.g. remove +
+            // re-add after checkout, replacement before payment, or a new
+            // purchase after the previous cart was cleared). It must be
+            // preserved whole even though the SKU matches and its addedAt is
+            // still < paidAt — the paidAt comparison cannot distinguish this
+            // (4fc6050).
+            const src = purchased.sourceAddedAt;
+            if (src !== null && src !== undefined) {
+              const srcMs = typeof src === 'bigint' ? Number(src) : Number(src);
+              if (Number.isFinite(item.addedAt) && Number.isFinite(srcMs) && item.addedAt !== srcMs) {
+                remaining.push(item);
+                continue;
               }
-              // fully purchased → drop; remainder >0 → keep the uncovered qty
-              // (concurrent add while payment was in flight)
+            } else {
+              // Legacy fallback (orders created before the identity migration):
+              // no persisted sourceAddedAt. A line added after order creation
+              // is a new generation and must be kept — the old paidAt check
+              // failed for pre-payment replacements (addedAt < paidAt but
+              // > createdAt). Using createdAt as the generation boundary
+              // preserves those replacements for legacy rows.
+              const createdAtMs = new Date(order.createdAt).getTime();
+              if (Number.isFinite(item.addedAt) && Number.isFinite(createdAtMs) && item.addedAt > createdAtMs) {
+                remaining.push(item);
+                continue;
+              }
             }
+            const remainder = item.qty - purchased.qty;
+            if (remainder > 0) {
+              remaining.push({ ...item, qty: remainder });
+            }
+            // remainder <= 0 → fully purchased → drop; remainder >0 → keep
+            // uncovered qty (concurrent qty add while payment was in flight
+            // with same generation).
           }
           const didChange =
             remaining.length !== cartState.items.length ||

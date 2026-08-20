@@ -87,6 +87,10 @@ export interface CheckoutLine {
   nameZhCn: string;
   nameEn: string;
   nameJa: string;
+  /** Epoch milliseconds of the originating cart line (CartItem.addedAt). Persists
+   * as OrderLine.sourceAddedAt so PAID cleanup can match the exact purchased
+   * generation instead of comparing with paidAt (review finding 4fc6050). */
+  addedAt: number;
 }
 
 export interface ResolvedCheckout {
@@ -161,6 +165,7 @@ export async function resolveCheckoutLines(items: CartItem[]): Promise<ResolvedC
       nameZhCn: resolved.productName['zh-CN'],
       nameEn: resolved.productName.en,
       nameJa: resolved.productName.ja,
+      addedAt: item.addedAt,
     });
     subtotalCents += subtotal;
   }
@@ -277,6 +282,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
             quantity: line.quantity,
             subtotalCents: line.quantity * line.priceCents,
             currency: 'CNY',
+            sourceAddedAt: BigInt(line.addedAt),
           })),
         },
       },

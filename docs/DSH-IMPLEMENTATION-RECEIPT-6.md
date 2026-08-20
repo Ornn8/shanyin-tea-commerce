@@ -276,6 +276,39 @@ With this repair the local verification reran clean on the new diff:
 `pnpm test` — unit suites pass — plus the per-locale checkout Playwright
 journeys.
 
+### Round 5 (exact head `4fc6050`)
+
+One P1 checkout-recovery finding from the exact-head review was fixed without
+changing the public UI:
+
+1. **Paid cleanup must not confuse a pre-payment replacement with the purchased
+    line.** Finding: `completePayment` (`src/lib/checkout-actions.ts:238`)
+    decided whether a cart line was a new generation by comparing
+    `CartItem.addedAt > Order.paidAt`. After order creation but before
+    `PaymentShell` acquired the cart lock, another tab could remove the original
+    line and re-add the same SKU. The replacement's `addedAt` was new but still
+    `< paidAt`, so the check was false and the SKU quantity subtraction deleted
+    or reduced the replacement; the marker then made the loss permanent. The
+    lock alone cannot distinguish generations. Fix: `OrderLine` now persists the
+    originating `CartItem.addedAt` as `sourceAddedAt` (migration
+    `20260822000000_checkout_order_line_identity`; `resolveCheckoutLines`
+    carries `addedAt` through to `createOrder`). `completePayment` loads the
+    persisted `sourceAddedAt` per SKU and matches it *exactly* against the
+    current cart item's `addedAt` instead of comparing with `paidAt`. A
+    replacement whose `addedAt` differs from the purchased generation is
+    preserved whole even if `addedAt < paidAt`; a same-generation line keeps the
+    quantity-aware remainder logic for concurrent adds while payment was in
+    flight. Legacy rows without `sourceAddedAt` fall back to a `createdAt`
+    boundary so a post-creation replacement is still kept. The `shanyin_paid_cleanup`
+    marker remains for idempotent post-cleanup replays. Covered by
+    `pnpm i18n:check` / `pnpm lint` / `pnpm typecheck` / `pnpm build` and unit
+    suites; manual verification of the pre-payment remove+re-add ordering.
+
+With this repair the local verification reran clean on the new diff:
+`pnpm i18n:check`, `pnpm lint`, `pnpm typecheck`, `pnpm build`, and
+`pnpm test` — unit suites pass — plus the per-locale checkout Playwright
+journeys.
+
 ## Security hardening (design notes)
 
 - The lookup credential is stored only as a SHA-256 hash: a database leak is

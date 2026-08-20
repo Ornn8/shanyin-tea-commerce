@@ -102,7 +102,11 @@ and local-viewing is locale-driven presentation over the stored snapshots.
 
 - New schema: `Order`, `OrderLine`, `PaymentEvent`, and the `OrderStatus` enum
   (migration `20260820000000_checkout_orders`) plus `Order.submissionKey`
-  (unique, migration `20260821000000_checkout_submission_key`); `PaymentEvent`
+  (unique, migration `20260821000000_checkout_submission_key`) and
+  `OrderLine.sourceAddedAt` (the originating `CartItem.addedAt`, migration
+  `20260822000000_checkout_order_line_identity`) which binds each order line to
+  its exact cart generation so PAID cleanup can match it exactly (replaces the
+  flawed `addedAt > paidAt` check, review finding 4fc6050); `PaymentEvent`
   is an audit log of every signature-valid event (never the raw payload or
   secrets).
 - Checkout is a multi-step flow: `/…/checkout` (form) → `/…/checkout/payment`
@@ -121,11 +125,12 @@ and local-viewing is locale-driven presentation over the stored snapshots.
   have been cleared, a later replay with the same PAID credential never deletes
   a NEW cart item that happens to share the SKU — enforced by a persistent
   `shanyin_paid_cleanup` marker cookie (the set of cleaned orderIds) and by
-  binding the removal to the cart line identity (`CartItem.addedAt` vs.
-  `Order.paidAt`). A failed payment keeps the cart for retry AND releases the
-  submission key so the retry creates a fresh order. A replayed form submission
-  returns the existing order (idempotent), so a double-click can never create
-  two orders.
+  binding the removal to the persisted cart line identity
+  (`OrderLine.sourceAddedAt` vs. `CartItem.addedAt`, exact match; legacy rows
+  without identity fall back to a `createdAt` boundary). A failed payment keeps
+  the cart for retry AND releases the submission key so the retry creates a
+  fresh order. A replayed form submission returns the existing order
+  (idempotent), so a double-click can never create two orders.
 - CI stays fully deterministic: the simulated gateway always emits a `succeeded`
   event in the happy path, and the integration suite drives `failed`/`expired`/
   `cancelled`/`refunded` plus duplicates and reordering through the same

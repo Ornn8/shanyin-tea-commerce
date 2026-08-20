@@ -294,6 +294,12 @@ model OrderLine {
   quantity      Int
   subtotalCents Int
   currency      String @default("CNY")
+  /// Epoch milliseconds of the originating cart line (CartItem.addedAt) at checkout
+  /// time. Binds PAID cleanup to the exact cart generation that was purchased, so
+  /// a later replacement that re-uses the same SKU (new addedAt) is never
+  /// mistaken for the purchased line (review finding 4fc6050: replaces the flawed
+  /// `addedAt > paidAt` comparison with an exact identity match).
+  sourceAddedAt BigInt?
 
   @@index([orderId])
   @@index([sku])
