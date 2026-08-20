@@ -38,6 +38,9 @@ jobs:
       AUTH_SECRET: ci-shanyin-auth-secret-4f2d1a77c3f8-change-r4
       # Signs the anonymous cart cookie (Issue #5, ADR-0007).
       CART_SECRET: ci-shanyin-cart-secret-4f2d1a77c3f8-change-r5
+      # Signs the deterministic simulated payment gateway events (Issue #6,
+      # ADR-0008). Test-mode only — it can never enable a live charge.
+      PAYMENT_SIM_SECRET: ci-shanyin-sim-payment-secret-4f2d1a77c3f8-change-r6
     steps:
       - name: Checkout
         uses: actions/checkout@v4

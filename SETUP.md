@@ -58,6 +58,15 @@ links, hreflang alternates, and JSON-LD URLs:
 | ----------------- | ----------------------------------------------------------------------- |
 | `PUBLIC_SITE_URL` | Optional trusted absolute public origin (e.g. `https://shop.example.com`). When set, canonical/structured-data URLs use it and forwarded request headers are never trusted; unset in local development, where only `localhost`/`127.0.0.1` on the dev ports are honored from headers |
 
+New in Issue #5 (`ADR-0007`): the anonymous cart signing secret. New in
+Issue #6 (`ADR-0008`): the simulated-payment signing secret and the optional
+Stripe test-mode adapter:
+
+| Variable          | Purpose                                                                  |
+| ----------------- | ------------------------------------------------------------------------ |
+| `PAYMENT_SIM_SECRET` | Signs the deterministic simulated payment gateway events (Issue #6, ADR-0008). Test/simulation only — it can never enable a live charge. Falls back to `AUTH_SECRET` locally |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Optional Stripe TEST-mode adapter (Issue #6, ADR-0008). Dormant unless the key is a `sk_test_*` key and a `whsec_*` webhook secret is set; live (`sk_live_*`) keys are rejected. Unset by default, so checkout runs entirely on the simulated gateway |
+
 ## 3. Install dependencies
 
 ```bash
@@ -113,20 +122,31 @@ session, non-allowlisted user), disabled public sign-up, CSRF origin rejection (
 rate limiting (429), and every mutation with its audit row (no secrets). The product-detail
 integration suite (`tests/integration/product-detail.test.ts`) covers variant ordering,
 English-fallback brewing guidance, language-neutral identity stability, published-only
-recommendations, and per-SKU cart lines (ADR-0006). The e2e merchant journeys sign in with
+recommendations, and per-SKU cart lines (ADR-0006). The checkout integration suite
+(`tests/integration/checkout.test.ts`, Issue #6, ADR-0008) covers server-owned totals (stale
+cart price never trusted), immutable order snapshots, signature rejection, duplicate events,
+event reordering, the concurrent last-unit purchase (only one of two competing payments wins),
+payment failure + retry, and credential-only non-enumerable lookup. The e2e merchant journeys sign in with
 `ADMIN_EMAIL` / `ADMIN_PASSWORD` and cover sign-in → create → localize → publish → inventory
 adjustment → sign-out at desktop (1440×900) and mobile (390×844) widths, the
 product-detail journeys (`e2e/product-detail.spec.ts`) cover variant selection, low-stock,
 unavailable defaults, invalid slugs, locale switching, structured data, and accessibility for
-the same two viewports, and the cart journeys (`e2e/cart.spec.ts`) cover one full add-to-cart
+the same two viewports, the cart journeys (`e2e/cart.spec.ts`) cover one full add-to-cart
 path per locale (quantities, subtotal, the non-binding shipping estimate, recovery across
 refresh and locale switch), server revalidation (concurrent stock change, price change,
 unpublish removal), a stock-capped add reporting the shortage instead of a false success, the
 expired-cart notice, and keyboard/live-region/focus behavior with long labels (Issue #5,
-ADR-0007). The cart unit suite (`tests/unit/cart.test.ts`) covers the signed cookie model
+ADR-0007), and the checkout journeys (`e2e/checkout.spec.ts`, Issue #6, ADR-0008) complete one
+simulated purchase and order lookup in every locale (cart → checkout with fake `@example.test`
+data → simulated payment → confirmation with the once-only lookup credential → credential
+lookup), assert locale switching changes copy only (never totals/order number/state), and
+redact artifacts (no screenshots or URLs ever contain the credential or real personal data).
+The cart unit suite (`tests/unit/cart.test.ts`) covers the signed cookie model
 (tamper/expiry) and shipping boundaries; `tests/integration/cart.test.ts` covers revalidation
 and the bounded, atomic service mutations — including an add that cannot grow the line
-reporting `insufficient-stock` rather than a false success.
+reporting `insufficient-stock` rather than a false success. New unit suites cover the order
+state machine, checkout validation, payment-gateway signing, order credentials, and the
+order→view mapping (ADR-0008).
 
 Playwright writes screenshots to `e2e/screenshots/<project>/<locale>-*.png` and, in CI, a
 `commit.txt` with the exact tested commit. Artifacts are uploaded by the `CI` workflow

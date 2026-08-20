@@ -407,6 +407,13 @@ export function CartShell({
                 {formatCny(totals!.estimatedTotalCents, locale)}
               </span>
             </div>
+            <Link
+              href={`/${locale}/checkout`}
+              data-testid="cart-checkout"
+              className="mt-1 inline-flex w-full items-center justify-center rounded-md bg-pine-700 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-pine-800"
+            >
+              {t('cart.checkout')}
+            </Link>
             <p className="text-xs text-stone-400">{t('product.cartDemoNote')}</p>
           </div>
         </>

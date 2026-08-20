@@ -199,3 +199,121 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// Pilot checkout, idempotent orders, and secure customer lookup (Issue #6,
+// ADR-0008).
+// ---------------------------------------------------------------------------
+
+/// Lifecycle of a checkout order (ADR-0008). The state machine is explicit:
+/// `pending` is the only open state, created when the shopper submits the
+/// checkout form; a VERIFIED gateway event moves it to a terminal state. A
+/// browser redirect is never payment authority — only a processed,
+/// replay-safe gateway event changes payment state, and stock is decremented
+/// exactly once when a `succeeded` event applies to a `pending` order.
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+  CANCELLED
+  REFUNDED
+}
+
+model Order {
+  id         String      @id @default(cuid())
+  /// Human-readable, non-sequential order number (e.g. SHY-7K2M9QX4D3).
+  orderNumber String     @unique
+  status     OrderStatus @default(PENDING)
+  /// Currency of record — CNY for every order (ADR-0003). Unchanged by locale.
+  currency   String      @default("CNY")
+  subtotalCents Int
+  shippingFeeCents Int
+  totalCents Int
+
+  /// Minimum documented contact + shipping fields (ADR-0008), validated
+  /// server-side. The SHA-256 hash of the high-entropy lookup credential is
+  /// the ONLY stored secret-bearing field — see `lookupHash`.
+  email          String
+  recipientName  String
+  addressLine1   String
+  city           String
+  region         String
+  postalCode     String
+  countryCode    String
+
+  /// SHA-256 hex of the high-entropy lookup credential. The plaintext
+  /// credential is never stored and is shown to the shopper exactly once at
+  /// confirmation; order existence is not enumerable through any other key.
+  lookupHash    String      @unique
+  /// Payment gateway reference. `simulated` in CI; optionally `stripe-test`.
+  gateway       String      @default("simulated")
+  /// The gateway's payment intent id — the one value that ties gateway events
+  /// to this order.
+  providerIntentId String    @unique
+  /// Localized reason for a `FAILED` payment (stock shortage or gateway).
+  failureReason String?
+  paidAt        DateTime?
+
+  lines  OrderLine[]
+  events PaymentEvent[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// An immutable snapshot of one sellable unit at checkout time (ADR-0008).
+/// The SKU stays language-neutral, but the localized display name is copied
+/// into `nameZhCn`/`nameEn`/`nameJa` so the order's meaning never changes when
+/// the catalog copy is later edited. Prices are integer CNY cents captured
+/// from the server at checkout time — never client-supplied, never re-read
+/// from the catalog after the order exists.
+model OrderLine {
+  id            String @id @default(cuid())
+  orderId       String
+  order         Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  sku           String
+  /// Package-size display snapshot (e.g. "100g"); not localized copy.
+  variantName   String
+  /// Localized product-name snapshots in every registered locale.
+  nameZhCn      String
+  nameEn        String
+  nameJa        String
+  unitPriceCents Int
+  quantity      Int
+  subtotalCents Int
+  currency      String @default("CNY")
+
+  @@index([orderId])
+  @@index([sku])
+}
+
+/// One processed gateway event for an order (ADR-0008). Every signature-valid
+/// event for a known intent is recorded exactly once — `providerEventId` is
+/// the idempotency key — so duplicate or reordered deliveries can never create
+/// a duplicate order or double-decrement stock. `resultStatus` is the order
+/// status AFTER the event was applied (the current status when the event was a
+/// safe state-machine no-op). No secret or raw payload is ever stored.
+model PaymentEvent {
+  id                String    @id @default(cuid())
+  orderId           String
+  order             Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  gateway           String
+  eventType         String
+  /// The gateway's unique event id (idempotency key, scoped per gateway).
+  providerEventId   String
+  /// Gateway-reported event timestamp (epoch seconds), for reordering audits.
+  eventCreatedAt    DateTime?
+  /// Recorded fact (never the payload itself): was the signature verified?
+  signatureVerified Boolean
+  /// The order status this event produced (or the current status when ignored).
+  resultStatus      OrderStatus
+  processedAt       DateTime  @default(now())
+
+  @@unique([gateway, providerEventId])
+  @@index([orderId])
+}

@@ -117,8 +117,29 @@ list is the acceptance checklist for the "explicit list of merchant facts/assets
 - [ ] Legal business identity: registered name, address, contact, tax/vAT details where applicable
 - [ ] Terms of service, privacy policy, returns/refunds policy
 - [ ] Shipping and fulfillment details, delivery areas and fees
-- [ ] Payment provider integration (the current cart is an explicit local demo with no checkout)
+- [ ] Payment provider integration — the current Pilot (Issue #6, ADR-0008) uses a
+      deterministic **simulated** payment gateway (and an optional dormant Stripe
+      **test-mode** adapter); live charges are out of scope until the merchant supplies
+      a real gateway contract and test credentials
 - [ ] Customer support channel
+
+## Customer orders (Issue #6, ADR-0008)
+
+The Pilot checkout persists real-shaped order data in the local database:
+contact/shpping fields the shopper enters, immutable order-line snapshots (SKU,
+prices, per-locale name snapshots), CNY totals, and the explicit payment state
+machine. No live charge is ever made. Before production the merchant must:
+
+- [ ] Define the production data-retention policy for orders (purpose,
+      retention window, deletion mechanics) and how long the high-entropy
+      lookup credential remains usable
+- [ ] Confirm the minimum order fields match real logistics and tax/VAT needs
+      (the current set is deliberately minimal)
+- [ ] Replace the simulated gateway with a signed-contract payment provider or
+      keep the (optional) Stripe test adapter behind real test keys — never live
+
+Demo orders created by the e2e journey use fake `@example.test` identities and
+are deleted in teardown.
 
 **Storefront**
 

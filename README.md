@@ -62,6 +62,10 @@ Full instructions and every verification command are in [SETUP.md](./SETUP.md).
 | `/…/products/:slug`            | Product detail: variants, facts, brewing guidance, structured data |
 | `/…/search?q=…`                | Search results with the same discovery view    |
 | `/…/cart`                      | Durable anonymous cart: signed cookie, quantities, price snapshots, and a non-binding shipping estimate (no checkout) |
+| `/…/checkout`                  | Pilot checkout: minimum contact + shipping fields, server-owned totals, localized privacy/error copy (ADR-0008) |
+| `/…/checkout/payment`          | Drives the deterministic simulated payment gateway; completion is set by a verified, replay-safe gateway event |
+| `/…/checkout/confirmation`     | Paid-order receipt with the once-only high-entropy lookup credential |
+| `/…/orders/lookup`             | Secure customer order lookup — credential-only, not enumerable (ADR-0008) |
 | `/admin/login`                 | Merchant sign-in (public registration disabled)|
 | `/admin/products`              | Merchant product list (protected)              |
 | `/admin/products/new`          | Create a product draft (protected)             |
@@ -101,6 +105,26 @@ lock (`src/lib/cart-lock.ts`, Web Locks API) so two tabs adding concurrently nev
 a mutation. See
 [ADR-0007](./docs/adr/0007-anonymous-cart-and-shipping-estimate.md).
 
+The Pilot checkout (`/…/checkout`, ADR-0008) turns that anonymous cart into an
+idempotently created order. It collects only the minimum documented contact and
+shipping fields, re-validates them and the cart server-side (the cart's stale
+price snapshot is never trusted — the server owns all totals), and persists an
+immutable order with per-locale name snapshots. Payment is driven by a
+deterministic simulated gateway in CI: the server processes a SIGNED,
+replay-safe gateway event through one state machine
+(`pending` → `paid`/`failed`/`expired`/`cancelled`, `paid` → `refunded`
+placeholder), reserving the event id in the same transaction as the atomic
+stock decrement — duplicate or reordered events can never create a duplicate
+order or double-decrement stock, and a browser redirect is never payment
+authority. An optional Stripe test-mode adapter (`sk_test_*` + `whsec_*`) maps
+verified webhook events onto the same pipeline; live charges are forbidden. The
+shopper then retrieves the order only through a high-entropy lookup credential
+(only its SHA-256 is stored): the confirmation page shows it once, and
+`/…/orders/lookup` returns a uniform "not found" for any wrong input — order
+existence is not enumerable, and locale switching changes copy only, never
+totals, identifiers, or payment state. See
+[ADR-0008](./docs/adr/0008-checkout-orders-and-payments.md).
+
 ## Scripts
 
 | Command              | What it does                                        |
@@ -136,6 +160,9 @@ see [.env.example](./.env.example)); the admin area is at `/admin`.
   - `0007-anonymous-cart-and-shipping-estimate.md` — signed anonymous cart (SKU + quantity +
     price snapshot), server-validated bounded quantity changes, revalidation on every render,
     and the non-binding shipping estimate.
+  - `0008-checkout-orders-and-payments.md` — Pilot checkout: server-owned totals, immutable
+    order snapshots, the explicit payment state machine, replay-safe verified gateway events,
+    and credential-only secure order lookup.
 - [docs/DSH-IMPLEMENTATION-RECEIPT.md](./docs/DSH-IMPLEMENTATION-RECEIPT.md) — implementation
   receipt for Issue #1 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-2.md](./docs/DSH-IMPLEMENTATION-RECEIPT-2.md) — implementation
@@ -146,3 +173,5 @@ see [.env.example](./.env.example)); the admin area is at `/admin`.
   receipt for Issue #4 (model + reasoning, no fallback).
 - [docs/DSH-IMPLEMENTATION-RECEIPT-5.md](./docs/DSH-IMPLEMENTATION-RECEIPT-5.md) — implementation
   receipt for Issue #5 (model + reasoning, no fallback).
+- [docs/DSH-IMPLEMENTATION-RECEIPT-6.md](./docs/DSH-IMPLEMENTATION-RECEIPT-6.md) — implementation
+  receipt for Issue #6 (model + reasoning, no fallback).
