@@ -126,7 +126,10 @@ recommendations, and per-SKU cart lines (ADR-0006). The checkout integration sui
 (`tests/integration/checkout.test.ts`, Issue #6, ADR-0008) covers server-owned totals (stale
 cart price never trusted), immutable order snapshots, signature rejection, duplicate events,
 event reordering, the concurrent last-unit purchase (only one of two competing payments wins),
-payment failure + retry, and credential-only non-enumerable lookup. The e2e merchant journeys sign in with
+payment failure + retry, idempotent order creation per submission key (a replayed key returns
+the existing order, never a duplicate), two concurrent distinct gateway events never
+double-decrementing stock, a post-`PAID` shortage never downgrading the order, and
+credential-only non-enumerable lookup. The e2e merchant journeys sign in with
 `ADMIN_EMAIL` / `ADMIN_PASSWORD` and cover sign-in → create → localize → publish → inventory
 adjustment → sign-out at desktop (1440×900) and mobile (390×844) widths, the
 product-detail journeys (`e2e/product-detail.spec.ts`) cover variant selection, low-stock,

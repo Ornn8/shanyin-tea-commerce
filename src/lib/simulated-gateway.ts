@@ -101,13 +101,17 @@ export function simulatedEventId(intentId: string, type: GatewayEventType): stri
 /**
  * Build a SIGNED simulated gateway event. `type` defaults to `succeeded` — the
  * deterministic Pilot outcome. The integration suite passes `failed`/
- * `expired`/`cancelled`/`refunded` directly to exercise the full state machine.
+ * `expired`/`cancelled`/`refunded` directly to exercise the full state machine,
+ * and an explicit `eventId` lets it simulate what a real gateway produces for
+ * the SAME intent: two distinct ids for the same semantic outcome (e.g.
+ * Stripe's `checkout.session.completed` and `payment_intent.succeeded`).
  */
 export function buildSimulatedEvent(input: {
   orderId: string;
   intentId: string;
   type?: GatewayEventType;
   now?: number;
+  eventId?: string;
 }): GatewayEventWire {
   const type = input.type ?? 'succeeded';
   if (!isKnownEventType(type)) throw new Error(`Unknown simulated event type: ${type}`);
@@ -118,7 +122,7 @@ export function buildSimulatedEvent(input: {
     orderId: input.orderId,
     intentId: input.intentId,
     type,
-    eventId: simulatedEventId(input.intentId, type),
+    eventId: input.eventId ?? simulatedEventId(input.intentId, type),
     createdAt: Math.floor(now / 1000),
   };
   return {

@@ -130,6 +130,42 @@
   in the URL, e2e orders cleaned).
 - Receipt identifies `deepseek-v4-flash` with `max` reasoning, no fallback: done.
 
+## Review repair (PR #36, review-repair run)
+
+Two P1 findings from the pull-request review were fixed on this branch without
+changing the public UI:
+
+1. **Serialize payment transitions per order.** `applyGatewayEvent` previously
+   read the order status OUTSIDE its transaction and updated the order by id
+   only, so two valid events with DIFFERENT ids for the same order (Stripe maps
+   both `checkout.session.completed` and `payment_intent.succeeded` to
+   `succeeded`) could both observe `PENDING` — double-decrementing stock, and
+   the stock-shortage fallback could overwrite `PAID` with `FAILED`. Now every
+   transition runs in ONE transaction that LOCKS the order row
+   (`SELECT … FOR UPDATE`), computes the transition from the locked fresh
+   status, and conditions the status update on that status; the shortage
+   fallback only transitions a still-`PENDING` order. New integration coverage:
+   two concurrent distinct `succeeded` events never double-decrement, a
+   post-`PAID` shortage never downgrades, and concurrent shortage deliveries
+   leave the order `FAILED` with inventory never negative.
+2. **Make checkout order creation idempotent.** `createOrder` now takes a
+   client submission key (`Order.submissionKey`, UNIQUE) that the checkout form
+   generates once per cart (pinned in `sessionStorage`, rebound by cart
+   fingerprint, sent as a hidden field). A replayed submission returns the
+   EXISTING order (`replay: true`, no new credential) instead of creating a
+   duplicate order + duplicate personal data for one checkout. New integration
+   coverage: same key → same order / one row / credential issued once; distinct
+   keys → distinct orders; a unit test for the key shape check.
+
+These are captured in ADR-0008 and covered by
+`tests/integration/checkout.test.ts` + `tests/unit/checkout-validation.test.ts`.
+
+With the repair, the local verification reran clean on the new diff:
+`pnpm i18n:check`, `pnpm lint`, `pnpm typecheck`, `pnpm build`, and
+`pnpm test` — **213 tests pass** (20 files; the checkout file grew from 373 to
+490 lines with the new concurrency + idempotency coverage) — plus the complete
+checkout Playwright journey per locale on desktop and mobile.
+
 ## Security hardening (design notes)
 
 - The lookup credential is stored only as a SHA-256 hash: a database leak is

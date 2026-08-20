@@ -246,6 +246,11 @@ model Order {
   /// credential is never stored and is shown to the shopper exactly once at
   /// confirmation; order existence is not enumerable through any other key.
   lookupHash    String      @unique
+  /// Client-provided submission idempotency key (ADR-0008). One checkout
+  /// submission maps to exactly one order: replaying the same key returns the
+  /// existing order instead of creating a duplicate (and duplicate personal
+  /// data) for one checkout.
+  submissionKey String      @unique
   /// Payment gateway reference. `simulated` in CI; optionally `stripe-test`.
   gateway       String      @default("simulated")
   /// The gateway's payment intent id — the one value that ties gateway events

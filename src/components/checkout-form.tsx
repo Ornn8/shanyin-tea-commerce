@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useActionState, useEffect } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { createT } from '@/i18n/catalog';
 import { formatCny } from '@/i18n/format';
 import type { LocaleId } from '@/i18n/registry';
@@ -12,7 +12,13 @@ import {
   type CreateCheckoutResult,
 } from '@/lib/checkout-actions';
 import type { CheckoutField } from '@/lib/checkout-validation';
-import { writeOrderTicket } from '@/lib/order-session';
+import {
+  generateCheckoutSubmissionKey,
+  readCheckoutSubmissionRef,
+  readOrderTicket,
+  writeCheckoutSubmissionRef,
+  writeOrderTicket,
+} from '@/lib/order-session';
 
 export interface CheckoutFormLine {
   sku: string;
@@ -30,6 +36,10 @@ interface CheckoutFormProps {
   subtotalCents: number;
   shippingFeeCents: number;
   totalCents: number;
+  /** Fingerprint of the signed cart cookie this form belongs to — the
+   * submission idempotency key is bound to it so a new cart rotates to a fresh
+   * key and can never collide with an older order. */
+  cartFingerprint: string;
 }
 
 const FIELDS: Array<{ id: CheckoutField; name: string; labelKey: MessageKey; testId: string; type?: string; autoComplete: string }> = [
@@ -47,17 +57,39 @@ const FIELDS: Array<{ id: CheckoutField; name: string; labelKey: MessageKey; tes
  * contact + shipping fields; the server re-validates every field and owns all
  * totals. On success the high-entropy lookup credential is parked in
  * sessionStorage (never the URL) and the flow advances to the payment step.
+ *
+ * Idempotent by client submission key: the key is generated once per checkout
+ * (bound to this cart's fingerprint and persisted in sessionStorage, so a
+ * double-click, a browser retry, or a refresh before paying reuses it). The
+ * server returns the EXISTING order for a replayed key, and the still-held
+ * ticket's credential is kept so the flow never silently discards it.
  */
-export function CheckoutForm({ locale, lines, subtotalCents, shippingFeeCents, totalCents }: CheckoutFormProps) {
+export function CheckoutForm({ locale, lines, subtotalCents, shippingFeeCents, totalCents, cartFingerprint }: CheckoutFormProps) {
   const t = createT(locale);
   const router = useRouter();
+
+  // High-entropy submission idempotency key, generated once per cart and
+  // pinned in sessionStorage. Reused across retries/refreshes for the SAME
+  // cart; rotated when the cart changes so an old key never collides with a
+  // previously created order.
+  const [submissionKey] = useState(() => {
+    const stored = readCheckoutSubmissionRef();
+    if (stored && stored.key && stored.cartFingerprint === cartFingerprint) return stored.key;
+    const fresh = generateCheckoutSubmissionKey();
+    writeCheckoutSubmissionRef({ key: fresh, cartFingerprint });
+    return fresh;
+  });
 
   const [state, formAction, pending] = useActionState<CreateCheckoutResult | null, FormData>(
     async (_prev, formData) => {
       const result = await createCheckout(formData);
       if (result.ok) {
+        // Merge rather than overwrite: an idempotent replay (which carries no
+        // new credential) must never discard the credential the FIRST
+        // submission issued for this same order.
+        const existing = readOrderTicket();
         writeOrderTicket({
-          credential: result.credential,
+          credential: result.credential ?? existing?.credential ?? '',
           checkoutId: result.checkoutId,
           orderNumber: result.orderNumber,
         });
@@ -82,6 +114,7 @@ export function CheckoutForm({ locale, lines, subtotalCents, shippingFeeCents, t
 
   return (
     <form action={formAction} noValidate className="flex flex-col gap-6 py-8" data-testid="checkout-form">
+      <input type="hidden" name="submissionKey" value={submissionKey} data-testid="checkout-submission-key" />
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="font-serif text-2xl font-semibold text-pine-900" data-testid="checkout-title">
           {t('checkout.title')}

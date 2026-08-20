@@ -42,6 +42,18 @@ CSPRNG, base64url) is NEVER stored: only its SHA-256 is persisted
 (`lookupHash`), so a database leak cannot be replayed to fetch orders, and it
 is shown to the shopper exactly once at confirmation.
 
+**Order creation is idempotent per client submission key.** The checkout form
+generates a high-entropy submission key ONCE per cart (pinned in the tab's
+`sessionStorage` and bound to a fingerprint of the exact signed cart cookie,
+so a genuinely new cart rotates to a fresh key) and submits it as a hidden
+field. `Order.submissionKey` is UNIQUE (migration
+`20260821000000_checkout_submission_key`): a replayed submission — a
+double-click, a browser retry after a network loss, a re-submit after an empty
+response — returns the EXISTING order instead of inserting a duplicate, so one
+checkout submission always means exactly one order and never duplicates
+personal data. The credential is re-issued only once; a replay returns the
+order identity without a credential (the server stores only the hash).
+
 **Payment state changes only through verified, replay-safe gateway events.**
 `applyGatewayEvent` (`src/lib/order-service.ts`) is the only place payment
 state moves and stock is touched, and a browser redirect is never payment
@@ -58,6 +70,18 @@ placeholder); a duplicate, reordered, or contradictory event is a recorded
 no-op that never mutates state or stock. Failure is a real state with a
 deterministic retry path (a new order from the kept cart).
 
+**Every transition SERIALIZES per order.** ALL processing for one order runs
+inside a single transaction that first LOCKS the order row
+(`SELECT … FOR UPDATE`) and computes the transition from the LOCKED, current
+status. Two concurrent events with DIFFERENT ids for the same order (Stripe
+maps both `checkout.session.completed` and `payment_intent.succeeded` to the
+same `succeeded` outcome) can never both observe `PENDING`: the second waits on
+the lock, re-evaluates, and becomes a recorded no-op — so stock is never
+double-decremented and the stock-shortage failure path can never downgrade an
+already-paid order to `FAILED` (it only transitions a still-`PENDING` order).
+The order's status update is additionally conditioned on the status the lock
+observed.
+
 **Lookup is credential-only and not enumerable.** `Order.lookupHash` is the
 single public read key; a wrong, missing, or malformed credential is the same
 uniform "not found" through `lookupOrder` / `getOrderViewByCredential` — order
@@ -69,12 +93,16 @@ and local-viewing is locale-driven presentation over the stored snapshots.
 ## Consequences
 
 - New schema: `Order`, `OrderLine`, `PaymentEvent`, and the `OrderStatus` enum
-  (migration `20260820000000_checkout_orders`); `PaymentEvent` is an audit log
-  of every signature-valid event (never the raw payload or secrets).
+  (migration `20260820000000_checkout_orders`) plus `Order.submissionKey`
+  (unique, migration `20260821000000_checkout_submission_key`); `PaymentEvent`
+  is an audit log of every signature-valid event (never the raw payload or
+  secrets).
 - Checkout is a multi-step flow: `/…/checkout` (form) → `/…/checkout/payment`
   (drives the deterministic simulated gateway) → `/…/checkout/confirmation`
   (once-only credential) and `/…/orders/lookup` (credential-only read). On
   success the cart cookie is cleared; a failed payment keeps the cart for retry.
+  A replayed form submission returns the existing order (idempotent), so a
+  double-click can never create two orders.
 - CI stays fully deterministic: the simulated gateway always emits a `succeeded`
   event in the happy path, and the integration suite drives `failed`/`expired`/
   `cancelled`/`refunded` plus duplicates and reordering through the same
@@ -89,6 +117,8 @@ and local-viewing is locale-driven presentation over the stored snapshots.
   `tests/unit/order-credentials.test.ts`, `tests/unit/order-view.test.ts`,
   `tests/integration/checkout.test.ts` (concurrent last-unit purchase, duplicate
   events, stale cart price, payment failure + retry, event reordering,
-  unauthorized lookup, signature rejection), and `e2e/checkout.spec.ts` (one
-  simulated purchase + lookup per locale, locale-switch invariance, redacted
-  artifacts).
+  unauthorized lookup, signature rejection, idempotent order creation per
+  submission key, two concurrent distinct events never double-decrementing
+  stock, and a post-`PAID` shortage never downgrading to `FAILED`), and
+  `e2e/checkout.spec.ts` (one simulated purchase + lookup per locale,
+  locale-switch invariance, redacted artifacts).

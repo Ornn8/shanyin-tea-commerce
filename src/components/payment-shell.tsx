@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createT } from '@/i18n/catalog';
 import type { LocaleId } from '@/i18n/registry';
 import { completePayment, type CompletePaymentResult } from '@/lib/checkout-actions';
-import { readOrderTicket, writeOrderTicket } from '@/lib/order-session';
+import { clearCheckoutSubmissionRef, readOrderTicket, writeOrderTicket } from '@/lib/order-session';
 import type { OrderView } from '@/lib/order-view';
 
 interface PaymentShellProps {
@@ -51,12 +51,15 @@ export function PaymentShell({ locale }: PaymentShellProps) {
         }
         if (result.status === 'PAID') {
           // Keep the ticket (confirmation re-validates by credential) and
-          // advance. The cart cookie was cleared server-side on success.
+          // advance. The cart cookie was cleared server-side on success. The
+          // submission idempotency key is released now that the order exists
+          // and is paid — a later checkout must start a fresh key.
           writeOrderTicket({
             credential: result.credential,
             checkoutId: result.order.orderId,
             orderNumber: result.order.orderNumber,
           });
+          clearCheckoutSubmissionRef();
           window.dispatchEvent(new Event('shanyin:cart'));
           // replace(), not push(): Back from confirmation must not re-run the
           // (idempotent) payment step.

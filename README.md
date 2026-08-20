@@ -109,15 +109,23 @@ The Pilot checkout (`/…/checkout`, ADR-0008) turns that anonymous cart into an
 idempotently created order. It collects only the minimum documented contact and
 shipping fields, re-validates them and the cart server-side (the cart's stale
 price snapshot is never trusted — the server owns all totals), and persists an
-immutable order with per-locale name snapshots. Payment is driven by a
-deterministic simulated gateway in CI: the server processes a SIGNED,
-replay-safe gateway event through one state machine
+immutable order with per-locale name snapshots. Order creation is idempotent
+per a client submission key (`Order.submissionKey` is unique): a replayed
+submission — a double-click, a retry after a network loss — returns the
+existing order, so one checkout can never mint two orders or duplicate personal
+data. Payment is driven by a deterministic simulated gateway in CI: the server
+processes a SIGNED, replay-safe gateway event through one state machine
 (`pending` → `paid`/`failed`/`expired`/`cancelled`, `paid` → `refunded`
 placeholder), reserving the event id in the same transaction as the atomic
 stock decrement — duplicate or reordered events can never create a duplicate
 order or double-decrement stock, and a browser redirect is never payment
-authority. An optional Stripe test-mode adapter (`sk_test_*` + `whsec_*`) maps
-verified webhook events onto the same pipeline; live charges are forbidden. The
+authority. Every transition is additionally serialized per order by locking the
+order row in the same transaction, so two concurrent events with different ids
+for one order (e.g. Stripe's `checkout.session.completed` and
+`payment_intent.succeeded`) can never both pay it or double-decrement, and a
+stock shortage can never downgrade a paid order. An optional Stripe test-mode
+adapter (`sk_test_*` + `whsec_*`) maps verified webhook events onto the same
+pipeline; live charges are forbidden. The
 shopper then retrieves the order only through a high-entropy lookup credential
 (only its SHA-256 is stored): the confirmation page shows it once, and
 `/…/orders/lookup` returns a uniform "not found" for any wrong input — order

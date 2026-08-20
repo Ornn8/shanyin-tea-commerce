@@ -52,6 +52,22 @@ export type CheckoutValidationResult =
   | { ok: true; values: { email: string; recipientName: string; addressLine1: string; city: string; region: string; postalCode: string; countryCode: string } }
   | { ok: false; errors: CheckoutFieldErrors };
 
+/** Client-generated submission idempotency key (ADR-0008): a high-entropy,
+ * opaque base64url string generated once per checkout submission and bound to
+ * that cart. The server only bounds and shape-checks it — uniqueness lives in
+ * the database — so a malformed key is rejected before any order is touched. */
+export const SUBMISSION_KEY_MAX_LENGTH = 128;
+const SUBMISSION_KEY_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Normalize a client submission idempotency key; null when malformed. */
+export function normalizeSubmissionKey(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  if (trimmed.length < 8 || trimmed.length > SUBMISSION_KEY_MAX_LENGTH) return null;
+  if (!SUBMISSION_KEY_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function asString(value: unknown): string | null {

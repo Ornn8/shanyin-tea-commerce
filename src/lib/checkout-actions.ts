@@ -7,7 +7,8 @@
  * - `createCheckout` validates the contact/shipping form server-side, re-reads
  *   the signed cart as server truth (prices/stock are NEVER client-supplied),
  *   and persists a PENDING order — returning the high-entropy lookup credential
- *   to the shopper exactly once.
+ *   to the shopper exactly once. Creation is idempotent per the client
+ *   submission key: a replayed submission returns the existing order.
  * - `completePayment` drives the deterministic simulated gateway and processes
  *   its SIGNED event through the same replay-safe pipeline as any webhook; a
  *   browser redirect is never payment authority, and completion is idempotent.
@@ -35,12 +36,13 @@ import { buildSimulatedEvent } from '@/lib/simulated-gateway';
 import { estimateShipping } from '@/lib/shipping-estimate';
 import {
   validateCheckoutFields,
+  normalizeSubmissionKey,
   type CheckoutFieldErrors,
 } from '@/lib/checkout-validation';
 import type { LocaleId } from '@/i18n/registry';
 
 export type CreateCheckoutResult =
-  | { ok: true; checkoutId: string; orderNumber: string; credential: string; totalCents: number }
+  | { ok: true; replay: boolean; checkoutId: string; orderNumber: string; credential?: string; totalCents: number }
   | { ok: false; code: 'empty-cart' | 'out-of-stock' | 'validation' | 'unexpected'; errors?: CheckoutFieldErrors };
 
 export async function createCheckout(formData: FormData): Promise<CreateCheckoutResult> {
@@ -68,15 +70,25 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
       return { ok: false, code: 'validation', errors: validation.errors };
     }
 
+    // 2b. The submission idempotency key is REQUIRED (ADR-0008): it is what
+    //     makes creation idempotent, so a malformed or absent key never
+    //     reaches the order service.
+    const submissionKey = normalizeSubmissionKey(formData.get('submissionKey'));
+    if (!submissionKey) {
+      return { ok: false, code: 'unexpected' };
+    }
+
     // 3. Totals come from the CURRENT catalog (stale cart price snapshots are
     //    never trusted — server owns totals) plus the deterministic shipping
     //    estimate (ADR-0007).
     const shipping = estimateShipping(resolved.subtotalCents);
     const totalCents = resolved.subtotalCents + shipping.feeCents;
 
-    // 4. Persist the immutable PENDING order (ADR-0008).
+    // 4. Persist the immutable PENDING order (ADR-0008). Idempotent: a replay
+    //    of the same submission key returns the EXISTING order.
     const created = await createOrder({
       ...validation.values,
+      submissionKey,
       lines: resolved.lines.map((line) => ({
         sku: line.sku,
         variantName: line.variantName,
@@ -94,6 +106,7 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
 
     return {
       ok: true,
+      replay: created.replay,
       checkoutId: created.orderId,
       orderNumber: created.orderNumber,
       credential: created.credential,

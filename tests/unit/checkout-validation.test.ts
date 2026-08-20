@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHECKOUT_FIELDS,
+  normalizeSubmissionKey,
   validateCheckoutFields,
   type CheckoutFieldErrors,
 } from '@/lib/checkout-validation';
@@ -77,5 +78,28 @@ describe('validateCheckoutFields (minimum documented contact + shipping)', () =>
       expect(errors.email).toBe('required');
       expect(errors.region).toBe('required');
     }
+  });
+});
+
+describe('normalizeSubmissionKey (idempotency key shape check)', () => {
+  it('accepts a well-formed base64url submission key', () => {
+    expect(normalizeSubmissionKey('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_')).toBe(
+      'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_',
+    );
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(normalizeSubmissionKey('  aBcDeFgH123  ')).toBe('aBcDeFgH123');
+  });
+
+  it('rejects malformed, too-short, too-long, or non-string keys', () => {
+    expect(normalizeSubmissionKey('')).toBeNull();
+    expect(normalizeSubmissionKey('short')).toBeNull(); // < 8 chars
+    expect(normalizeSubmissionKey('has space here')).toBeNull();
+    expect(normalizeSubmissionKey('has/slash')).toBeNull();
+    expect(normalizeSubmissionKey('x'.repeat(129))).toBeNull();
+    expect(normalizeSubmissionKey(null)).toBeNull();
+    expect(normalizeSubmissionKey(undefined)).toBeNull();
+    expect(normalizeSubmissionKey(42)).toBeNull();
   });
 });

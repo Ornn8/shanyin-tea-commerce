@@ -52,6 +52,14 @@ const CONTACT = {
 
 const createdOrderIds: string[] = [];
 
+/** Monotonic unique submission key for fixtures — every checkout helper call is
+ * a distinct submission intent. */
+let submissionCounter = 0;
+function uniqueSubmissionKey(): string {
+  submissionCounter += 1;
+  return `it-submission-${submissionCounter}-${Date.now().toString(36)}`;
+}
+
 async function inventoryOf(sku: string): Promise<number> {
   const variant = await prisma.productVariant.findUnique({ where: { sku }, select: { inventory: true } });
   return variant?.inventory ?? -1;
@@ -64,6 +72,7 @@ async function createCheckoutOrder(sku: string, qty: number, priceSnapshot = 1, 
   const shipping = estimateShipping(resolved.subtotalCents);
   const created = await createOrder({
     ...CONTACT,
+    submissionKey: uniqueSubmissionKey(),
     lines: resolved.lines,
     subtotalCents: resolved.subtotalCents,
     shippingFeeCents: shipping.feeCents,
@@ -73,7 +82,7 @@ async function createCheckoutOrder(sku: string, qty: number, priceSnapshot = 1, 
   return created;
 }
 
-async function applySuccessFor(credential: string) {
+async function applySuccessFor(credential: string | undefined) {
   const identity = await findOrderIdentityByCredential(credential);
   if (!identity) throw new Error('identity missing');
   return applyGatewayEvent(
@@ -81,7 +90,7 @@ async function applySuccessFor(credential: string) {
   );
 }
 
-async function identityFor(credential: string) {
+async function identityFor(credential: string | undefined) {
   const identity = await findOrderIdentityByCredential(credential);
   if (!identity) throw new Error('identity missing');
   return identity;
@@ -174,8 +183,10 @@ describeDb('checkout & payments (ADR-0008)', () => {
       expect(identity?.status).toBe('PENDING');
 
       const row = await prisma.order.findUniqueOrThrow({ where: { id: created.orderId }, include: { lines: true } });
-      expect(row.lookupHash).toBe(hashLookupCredential(created.credential));
-      expect(row.lookupHash).not.toContain(created.credential);
+      // A fresh submission always creates the order and issues its credential.
+      const credential = created.credential!;
+      expect(row.lookupHash).toBe(hashLookupCredential(credential));
+      expect(row.lookupHash).not.toContain(credential);
       expect(row.status).toBe('PENDING');
       expect(row.gateway).toBe('simulated');
       expect(row.totalCents).toBeGreaterThan(0);
@@ -194,6 +205,44 @@ describeDb('checkout & payments (ADR-0008)', () => {
       expect(row.lines[0].nameEn).toBe('Checkout Demo Tea');
       expect(row.lines[0].nameZhCn).toBe('结算演示茶');
       expect(row.lines[0].nameJa).toBe('チェックアウトデモ茶');
+    });
+
+    it('is idempotent per submission key: a replayed key returns the existing order, never a duplicate', async () => {
+      const resolved = await resolveCheckoutLines([item(SKU_MAIN, 1)]);
+      const shipping = estimateShipping(resolved.subtotalCents);
+      const input = {
+        ...CONTACT,
+        submissionKey: uniqueSubmissionKey(),
+        lines: resolved.lines,
+        subtotalCents: resolved.subtotalCents,
+        shippingFeeCents: shipping.feeCents,
+        totalCents: resolved.subtotalCents + shipping.feeCents,
+      };
+
+      const first = await createOrder(input);
+      expect(first.replay).toBe(false);
+      expect(first.credential).toBeDefined();
+
+      // Replay the SAME submission (retry / double-click): same order, no new
+      // credential (issued exactly once), no duplicate personal data.
+      const replay = await createOrder(input);
+      expect(replay.replay).toBe(true);
+      expect(replay.orderId).toBe(first.orderId);
+      expect(replay.orderNumber).toBe(first.orderNumber);
+      expect(replay.credential).toBeUndefined();
+
+      // Exactly one order row exists for the submission key, and the original
+      // credential still resolves to it.
+      expect(await prisma.order.count({ where: { submissionKey: input.submissionKey } })).toBe(1);
+      const identity = await findOrderIdentityByCredential(first.credential as string);
+      expect(identity?.orderId).toBe(first.orderId);
+      createdOrderIds.push(first.orderId);
+    });
+
+    it('creates DISTINCT orders for distinct submission keys (a new checkout is a new intent)', async () => {
+      const a = await createCheckoutOrder(SKU_MAIN, 1);
+      const b = await createCheckoutOrder(SKU_MAIN, 1);
+      expect(a.orderId).not.toBe(b.orderId);
     });
   });
 
@@ -275,6 +324,76 @@ describeDb('checkout & payments (ADR-0008)', () => {
       expect(refunded.applied).toBe(true);
       expect((await prisma.order.findUniqueOrThrow({ where: { id: created.orderId } })).status).toBe('REFUNDED');
     });
+
+    it('SERIALIZES per order: two concurrent succeeded events with DIFFERENT ids never double-decrement stock', async () => {
+      // Reproduces the Stripe test-mode reality where both
+      // `checkout.session.completed` AND `payment_intent.succeeded` map to the
+      // same `succeeded` outcome with two different event ids. Both read the
+      // order concurrently; exactly one may pay it.
+      await prisma.productVariant.update({ where: { sku: SKU_MAIN }, data: { inventory: 2 } });
+      const created = await createCheckoutOrder(SKU_MAIN, 2);
+      const identity = await identityFor(created.credential);
+      const eventA = buildSimulatedEvent({ orderId: identity.orderId, intentId: identity.providerIntentId, eventId: 'evt_test_a' });
+      const eventB = buildSimulatedEvent({ orderId: identity.orderId, intentId: identity.providerIntentId, eventId: 'evt_test_b' });
+
+      const [ra, rb] = await Promise.all([applyGatewayEvent(eventA), applyGatewayEvent(eventB)]);
+
+      // Exactly one delivery APPLIED (and decremented); the other was a
+      // recorded no-op after observing the PAID state. Stock moved exactly
+      // 2 → 0 — never double-decremented.
+      const applied = [ra, rb].filter((r) => r.applied);
+      expect(applied).toHaveLength(1);
+      expect(applied[0].reason).toBe('paid');
+      expect(await inventoryOf(SKU_MAIN)).toBe(0);
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: created.orderId } })).status).toBe('PAID');
+      // Both distinct deliveries are recorded once each as audit evidence.
+      const events = await prisma.paymentEvent.findMany({ where: { orderId: created.orderId } });
+      expect(events.map((e) => e.providerEventId).sort()).toEqual(['evt_test_a', 'evt_test_b']);
+    });
+
+    it('a stock shortage after PAID can never downgrade the order to FAILED', async () => {
+      // Fully pay the order (stock consumed exactly once), then deliver a
+      // SECOND succeeded event with a DIFFERENT id while stock is exhausted.
+      // The fallback that records a stock failure only fires when the order is
+      // still PENDING, so PAID is preserved and inventory is never re-touched.
+      await prisma.productVariant.update({ where: { sku: SKU_MAIN }, data: { inventory: 1 } });
+      const created = await createCheckoutOrder(SKU_MAIN, 1);
+      const identity = await identityFor(created.credential);
+      const first = await applyGatewayEvent(
+        buildSimulatedEvent({ orderId: identity.orderId, intentId: identity.providerIntentId }),
+      );
+      expect(first.applied).toBe(true);
+      expect(await inventoryOf(SKU_MAIN)).toBe(0);
+
+      const second = await applyGatewayEvent(
+        buildSimulatedEvent({ orderId: identity.orderId, intentId: identity.providerIntentId, eventId: 'evt_test_again' }),
+      );
+      expect(second.applied).toBe(false);
+      expect((second as { reason: string }).reason).toBe('noop');
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: created.orderId } })).status).toBe('PAID');
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: created.orderId } })).failureReason).toBeNull();
+      expect(await inventoryOf(SKU_MAIN)).toBe(0);
+    });
+
+    it('concurrent stock-shortage deliveries leave the order FAILED and never negative inventory', async () => {
+      // Two distinct succeeded events race for a 2-unit order whose stock is
+      // drained to ZERO just before the race: every delivery hits a shortage.
+      // Whichever interleaving wins, the order ends FAILED (never PAID, never
+      // downgraded from PAID) and inventory is never negative.
+      await prisma.productVariant.update({ where: { sku: SKU_LAST }, data: { inventory: 2 } });
+      const created = await createCheckoutOrder(SKU_LAST, 2);
+      const identity = await identityFor(created.credential);
+      await prisma.productVariant.update({ where: { sku: SKU_LAST }, data: { inventory: 0 } });
+      const eventA = buildSimulatedEvent({ orderId: identity.orderId, intentId: identity.providerIntentId, eventId: 'evt_short_a' });
+      const eventB = buildSimulatedEvent({ orderId: identity.orderId, intentId: identity.providerIntentId, eventId: 'evt_short_b' });
+
+      const [ra, rb] = await Promise.all([applyGatewayEvent(eventA), applyGatewayEvent(eventB)]);
+
+      expect([ra, rb].filter((r) => r.applied)).toHaveLength(1);
+      expect(await inventoryOf(SKU_LAST)).toBe(0); // never decremented, never negative
+      const status = (await prisma.order.findUniqueOrThrow({ where: { id: created.orderId } })).status;
+      expect(status).toBe('FAILED');
+    });
   });
 
   describe('concurrent last-unit purchase (atomic stock decrement)', () => {
@@ -307,6 +426,7 @@ describeDb('checkout & payments (ADR-0008)', () => {
       expect(resolved.lines[0].priceCents).toBe(17500); // stale snapshot ignored
       const created = await createOrder({
         ...CONTACT,
+        submissionKey: uniqueSubmissionKey(),
         lines: resolved.lines,
         subtotalCents: resolved.subtotalCents,
         shippingFeeCents: 0,
