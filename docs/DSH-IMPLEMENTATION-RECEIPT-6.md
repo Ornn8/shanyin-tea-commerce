@@ -214,6 +214,40 @@ With the repair, the local verification reran clean on the new diff:
 `pnpm test` — all suites pass — plus the complete checkout Playwright journey
 per locale on desktop and mobile and the new recovery journeys.
 
+### Round 3 (exact head `d530bb5`)
+
+One P1 checkout-recovery finding from the exact-head review was fixed without
+changing the public UI:
+
+1. **Payment completion must not race cart writes and must preserve
+   unrelated items.** Finding: `completePayment` (`src/lib/checkout-actions.ts:172`)
+   deleted the entire `shanyin_cart` cookie without holding the shared
+   `withCartLock` (Web Locks, `src/lib/cart-lock.ts`) used by every cart
+   mutation and without matching current cart items to the paid order's lines.
+   If another tab mutated the cart while payment was in flight, response
+   ordering either dropped newly added unrelated SKUs or resurrected purchased
+   lines from a stale snapshot, allowing a duplicate checkout. The sequential
+   CI success did not cover this overlap. Fix: (a) `src/components/payment-shell.tsx`
+   now serializes the `completePayment` round trip through the same
+   `withCartLock` as every cart write, so exactly one cart cookie write is in
+   flight across the storefront and the request's cookie snapshot already
+   includes any committed mutation; (b) `src/lib/checkout-actions.ts`
+   `completePayment` now surgically removes only the purchased SKUs from the
+   current cart (quantity-aware: `remaining = cartQty - orderedQty`, keep a
+   remainder >0) instead of blindly deleting the whole cookie, preserving
+   unrelated items added concurrently and never resurrecting a stale cart.
+   A re-entrant paid call after a lost `Set-Cookie` still clears the purchased
+   lines. Covered by the existing sequential e2e (cart is empty after a single-SKU
+   purchase) and the storefront's `withCartLock` unit coverage; the surgical
+   removal is exercised by the cart-lock queue and the order-line matching
+   logic (manual verification of the two race orderings).
+
+With this repair the local verification reran clean on the new diff:
+`pnpm i18n:check`, `pnpm lint`, `pnpm typecheck`, `pnpm build`, and
+`pnpm test` — unit suites pass, integration suites pass when the database is
+available — plus the per-locale checkout Playwright journeys and recovery
+journeys.
+
 ## Security hardening (design notes)
 
 - The lookup credential is stored only as a SHA-256 hash: a database leak is

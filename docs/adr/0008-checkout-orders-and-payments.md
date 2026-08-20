@@ -108,13 +108,18 @@ and local-viewing is locale-driven presentation over the stored snapshots.
 - Checkout is a multi-step flow: `/…/checkout` (form) → `/…/checkout/payment`
   (drives the deterministic simulated gateway) → `/…/checkout/confirmation`
   (recoverable credential shown so the shopper can save it) and
-  `/…/orders/lookup` (credential-only read). ANY paid conclusion clears the
-  cart cookie (the order is the record) — including a re-entrant payment step
-  after a lost response that committed the order but never delivered the
-  Set-Cookie — so purchased lines can never be checked out again. A failed
-  payment keeps the cart for retry AND releases the submission key so the
-  retry creates a fresh order. A replayed form submission returns the existing
-  order (idempotent), so a double-click can never create two orders.
+  `/…/orders/lookup` (credential-only read). ANY paid conclusion surgically
+  removes only the purchased lines from the cart cookie — including a
+  re-entrant payment step after a lost response that committed the order but
+  never delivered the Set-Cookie — so purchased lines can never be checked out
+  again while unrelated SKUs or a remainder quantity added concurrently in
+  another tab are preserved. The payment round trip is serialized through the
+  shared `withCartLock` (Web Locks, `src/lib/cart-lock.ts`) and the server
+  matches current cart items to the paid order's lines (quantity-aware) so no
+  tab's cart mutation is silently dropped or resurrected by response ordering.
+  A failed payment keeps the cart for retry AND releases the submission key so
+  the retry creates a fresh order. A replayed form submission returns the
+  existing order (idempotent), so a double-click can never create two orders.
 - CI stays fully deterministic: the simulated gateway always emits a `succeeded`
   event in the happy path, and the integration suite drives `failed`/`expired`/
   `cancelled`/`refunded` plus duplicates and reordering through the same

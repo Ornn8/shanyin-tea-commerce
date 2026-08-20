@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { createT } from '@/i18n/catalog';
 import type { LocaleId } from '@/i18n/registry';
+import { withCartLock } from '@/lib/cart-lock';
 import { completePayment, type CompletePaymentResult } from '@/lib/checkout-actions';
 import { clearCheckoutSubmissionRef, readOrderTicket, writeOrderTicket } from '@/lib/order-session';
 import type { OrderView } from '@/lib/order-view';
@@ -44,7 +45,14 @@ export function PaymentShell({ locale }: PaymentShellProps) {
         return;
       }
       try {
-        const result: CompletePaymentResult = await completePayment(ticket.credential, locale);
+        // Serialize the payment round trip through the shared cart lock so no
+        // other tab's cart mutation can interleave: the request's cookie
+        // snapshot already includes any committed mutation, and the server's
+        // surgical cart clearing (matching current items to the paid order's
+        // lines) preserves unrelated SKUs. Without the lock, response ordering
+        // either drops newly added items or resurrects purchased lines from a
+        // stale snapshot.
+        const result: CompletePaymentResult = await withCartLock(() => completePayment(ticket.credential, locale));
         if (!result.ok) {
           setPhase({ kind: 'unexpected' });
           return;

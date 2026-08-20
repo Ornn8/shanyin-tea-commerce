@@ -23,8 +23,8 @@
  * never formats translated strings and never echoes user input into messages.
  */
 import { cookies } from 'next/headers';
-import { CART_COOKIE } from '@/lib/cart';
-import { parseCart } from '@/lib/cart-signing';
+import { CART_COOKIE, CART_MAX_AGE_SECONDS, type CartItem } from '@/lib/cart';
+import { parseCart, serializeCart } from '@/lib/cart-signing';
 import {
   applyGatewayEvent,
   createOrder,
@@ -132,10 +132,19 @@ export type CompletePaymentResult =
  * failed → failed) and can never create a duplicate order or double-decrement
  * stock.
  *
- * WHATEVER path concludes PAID, the purchased cart cookie is cleared: the order
- * is now the record, so a re-entrant call after a lost response (whose
- * Set-Cookie never reached the browser) still removes the purchased lines and
- * can never leave them in the cart for a duplicate checkout.
+ * WHATEVER path concludes PAID, only the PURCHASED lines are removed from the
+ * cart cookie — unrelated SKUs (or a remainder quantity) added in another tab
+ * while payment was in flight are preserved. The client MUST hold the shared
+ * `withCartLock` (Web Locks, `src/lib/cart-lock.ts`) while invoking this
+ * action so the read-modify-write on the single `shanyin_cart` cookie is
+ * serialized across tabs: without the lock, response ordering either drops
+ * newly added items or resurrects purchased lines from a stale snapshot,
+ * allowing a duplicate checkout. The server additionally matches current cart
+ * items to the paid order's lines (quantity-aware) so a concurrent cart write
+ * cannot be silently overwritten by a blind whole-cookie delete. A re-entrant
+ * call after a lost response (whose Set-Cookie never reached the browser)
+ * still removes the purchased lines and can never leave them for a duplicate
+ * checkout.
  */
 export async function completePayment(credential: string, locale: LocaleId): Promise<CompletePaymentResult> {
   try {
@@ -164,12 +173,49 @@ export async function completePayment(credential: string, locale: LocaleId): Pro
       order = current;
     }
 
-    // Any PAID conclusion clears the purchased lines from the cart — whether
-    // payment just committed in this call or had committed before a lost
-    // response — so a paid order's lines can never be checked out again.
+    // Any PAID conclusion surgically removes ONLY the purchased lines from the
+    // cart — whether payment just committed in this call or had committed
+    // before a lost response — so a paid order's lines can never be checked
+    // out again, while unrelated SKUs (or a remainder quantity) added
+    // concurrently in another tab are preserved. This is the server side of
+    // the race fix; the client side serializes the whole round trip through
+    // `withCartLock` so the request's cookie snapshot already includes any
+    // committed cart mutation.
     if (order.status === 'PAID') {
       const store = await cookies();
-      store.delete(CART_COOKIE);
+      const raw = store.get(CART_COOKIE)?.value;
+      const cartState = parseCart(raw);
+      if (cartState.status === 'ok' && cartState.items.length > 0) {
+        const purchasedQtyBySku = new Map<string, number>();
+        for (const line of order.lines) {
+          purchasedQtyBySku.set(line.sku, (purchasedQtyBySku.get(line.sku) ?? 0) + line.quantity);
+        }
+        const hasPurchasedInCart = cartState.items.some((item) => purchasedQtyBySku.has(item.sku));
+        if (hasPurchasedInCart) {
+          const remaining: CartItem[] = [];
+          for (const item of cartState.items) {
+            const purchasedQty = purchasedQtyBySku.get(item.sku);
+            if (purchasedQty === undefined) {
+              remaining.push(item);
+            } else {
+              const remainder = item.qty - purchasedQty;
+              if (remainder > 0) {
+                remaining.push({ ...item, qty: remainder });
+              }
+              // fully purchased → drop; remainder >0 → keep the uncovered qty
+            }
+          }
+          if (remaining.length === 0) {
+            store.delete(CART_COOKIE);
+          } else {
+            store.set(CART_COOKIE, serializeCart(remaining), {
+              path: '/',
+              maxAge: CART_MAX_AGE_SECONDS,
+              sameSite: 'lax',
+            });
+          }
+        }
+      }
     }
 
     return { ok: true, status: order.status, order, credential };
