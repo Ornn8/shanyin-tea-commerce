@@ -253,6 +253,13 @@ model Order {
   /// existing order instead of creating a duplicate (and duplicate personal
   /// data) for one checkout.
   submissionKey String      @unique
+  /// Fingerprint of the signed cart cookie at checkout time (hash of the cookie
+  /// value, 16 hex chars). Binds an order to its cart generation so two tabs
+  /// sharing the same cart cannot create two different orders with different
+  /// submission keys — cross-tab idempotency (review finding d49e4cb P1 #1).
+  /// A terminal order (FAILED/EXPIRED/CANCELLED/REFUNDED) releases the
+  /// fingerprint so a retry from the kept cart can create a fresh order.
+  cartFingerprint String?
   /// Payment gateway reference. `simulated` in CI; optionally `stripe-test`.
   gateway       String      @default("simulated")
   /// The gateway's payment intent id — the one value that ties gateway events
@@ -270,6 +277,7 @@ model Order {
 
   @@index([status])
   @@index([createdAt])
+  @@index([cartFingerprint])
 }
 
 /// An immutable snapshot of one sellable unit at checkout time (ADR-0008).

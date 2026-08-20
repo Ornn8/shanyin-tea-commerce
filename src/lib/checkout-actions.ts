@@ -22,6 +22,7 @@
  * Errors return plain codes the client maps onto localized copy — the server
  * never formats translated strings and never echoes user input into messages.
  */
+import { createHash } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { CART_COOKIE, CART_MAX_AGE_SECONDS, type CartItem } from '@/lib/cart';
 import { parseCart, serializeCart } from '@/lib/cart-signing';
@@ -42,6 +43,7 @@ import {
   normalizeSubmissionKey,
   type CheckoutFieldErrors,
 } from '@/lib/checkout-validation';
+import { deriveLookupCredential } from '@/lib/order-credentials';
 import type { LocaleId } from '@/i18n/registry';
 
 export type CreateCheckoutResult =
@@ -50,14 +52,66 @@ export type CreateCheckoutResult =
 
 export async function createCheckout(formData: FormData): Promise<CreateCheckoutResult> {
   try {
+    // 0. The submission idempotency key is REQUIRED (ADR-0008) and MUST be
+    //    checked BEFORE cart validation. If the first create response was lost
+    //    after the DB insert committed, the cart may now be expired/cleared,
+    //    unpublished, or out-of-stock — but the PENDING order and PII already
+    //    exist. Recovering the existing submission before cart checks prevents
+    //    stranding the order and creating a duplicate (review finding d49e4cb
+    //    P1 #2).
+    const submissionKey = normalizeSubmissionKey(formData.get('submissionKey'));
+    if (!submissionKey) {
+      return { ok: false, code: 'unexpected' };
+    }
+    const existingByKey = await prisma.order.findUnique({
+      where: { submissionKey },
+      select: { id: true, orderNumber: true, totalCents: true },
+    });
+    if (existingByKey) {
+      const credential = deriveLookupCredential(submissionKey);
+      return {
+        ok: true,
+        replay: true,
+        checkoutId: existingByKey.id,
+        orderNumber: existingByKey.orderNumber,
+        credential,
+        totalCents: existingByKey.totalCents,
+      };
+    }
+
     // 1. Re-read and VALIDATE the signed cart (server truth). A cart that is
-    //    expired, tampered, or empty can never start a checkout.
+    //    expired, tampered, or empty can never start a NEW checkout (a replay
+    //    above already returned).
     const store = await cookies();
-    const state = parseCart(store.get(CART_COOKIE)?.value);
+    const rawCart = store.get(CART_COOKIE)?.value;
+    const state = parseCart(rawCart);
     if (state.status !== 'ok') return { ok: false, code: 'empty-cart' };
     const resolved = await resolveCheckoutLines(state.items);
     if (resolved.lines.length === 0) return { ok: false, code: 'empty-cart' };
     if (resolved.outOfStock) return { ok: false, code: 'out-of-stock' };
+
+    // 1b. Cross-tab idempotency: one cart generation (fingerprint of the
+    //     signed cart cookie) maps to at most one open (PENDING/PAID) order.
+    //     Two tabs sharing the same cart but generating different
+    //     sessionStorage submissionKeys must not create two orders that can both
+    //     become PAID when inventory remains. Enforced on the server via the
+    //     stored cartFingerprint (review finding d49e4cb P1 #1).
+    const cartFingerprint = createHash('sha256').update(rawCart ?? '').digest('hex').slice(0, 16);
+    const existingByFp = await prisma.order.findFirst({
+      where: { cartFingerprint, status: { in: ['PENDING', 'PAID'] } },
+      select: { id: true, orderNumber: true, submissionKey: true, totalCents: true },
+    });
+    if (existingByFp) {
+      const credential = deriveLookupCredential(existingByFp.submissionKey);
+      return {
+        ok: true,
+        replay: true,
+        checkoutId: existingByFp.id,
+        orderNumber: existingByFp.orderNumber,
+        credential,
+        totalCents: existingByFp.totalCents,
+      };
+    }
 
     // 2. Validate the minimum contact + shipping fields server-side.
     const validation = validateCheckoutFields({
@@ -73,26 +127,19 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
       return { ok: false, code: 'validation', errors: validation.errors };
     }
 
-    // 2b. The submission idempotency key is REQUIRED (ADR-0008): it is what
-    //     makes creation idempotent, so a malformed or absent key never
-    //     reaches the order service.
-    const submissionKey = normalizeSubmissionKey(formData.get('submissionKey'));
-    if (!submissionKey) {
-      return { ok: false, code: 'unexpected' };
-    }
-
     // 3. Totals come from the CURRENT catalog (stale cart price snapshots are
     //    never trusted — server owns totals) plus the deterministic shipping
     //    estimate (ADR-0007).
     const shipping = estimateShipping(resolved.subtotalCents);
     const totalCents = resolved.subtotalCents + shipping.feeCents;
 
-    // 4. Persist the immutable PENDING order (ADR-0008). Idempotent: a replay
-    //    of the same submission key returns the EXISTING order together with
-    //    its SAME derived credential, so payment can always authorize it.
+    // 4. Persist the immutable PENDING order (ADR-0008). Idempotent per
+    //    submissionKey AND per cart generation: a replay of the same key OR a
+    //    second tab with the same cart fingerprint returns the existing order.
     const created = await createOrder({
       ...validation.values,
       submissionKey,
+      cartFingerprint,
       lines: resolved.lines.map((line) => ({
         sku: line.sku,
         variantName: line.variantName,
@@ -108,6 +155,22 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
       shippingFeeCents: shipping.feeCents,
       totalCents,
     });
+
+    // A race that hit the partial unique on cartFingerprint (two tabs both
+    // passed the pre-check) returns the winning order via createOrder's catch;
+    // ensure we return its stored total/credential.
+    if (created.replay) {
+      const row = await prisma.order.findUnique({ where: { id: created.orderId }, select: { totalCents: true } });
+      const storedTotal = row?.totalCents ?? totalCents;
+      return {
+        ok: true,
+        replay: true,
+        checkoutId: created.orderId,
+        orderNumber: created.orderNumber,
+        credential: created.credential,
+        totalCents: storedTotal,
+      };
+    }
 
     return {
       ok: true,

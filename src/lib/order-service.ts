@@ -202,6 +202,12 @@ export interface CreateOrderInput extends OrderContact {
    * double-submitted or retried checkout can never create multiple PENDING
    * orders (or duplicate personal data) for one checkout (ADR-0008). */
   submissionKey: string;
+  /** Fingerprint of the signed cart cookie at checkout time (hash of the cookie,
+   * 16 hex chars). Binds an order to its cart generation so two tabs sharing
+   * the same cart cannot create two different orders with different submission
+   * keys — cross-tab idempotency (review finding d49e4cb P1 #1). Only
+   * PENDING/PAID orders contest the fingerprint; a terminal order releases it. */
+  cartFingerprint?: string | null;
 }
 
 export interface CreatedOrder {
@@ -241,6 +247,24 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
   const orderNumber = generateOrderNumber();
   const providerIntentId = newProviderIntentId('simulated');
 
+  // Cross-tab idempotency: one cart generation maps to at most one open
+  // (PENDING/PAID) order. Two tabs sharing the same signed cart cookie have the
+  // same cartFingerprint but different submissionKeys; the second must replay the
+  // first order instead of creating a duplicate that could also become PAID.
+  // Terminal orders (FAILED/EXPIRED/CANCELLED/REFUNDED) release the fingerprint
+  // so a retry from the kept cart can create a fresh order.
+  const fingerprint = input.cartFingerprint ?? null;
+  if (fingerprint) {
+    const existingByFingerprint = await prisma.order.findFirst({
+      where: { cartFingerprint: fingerprint, status: { in: ['PENDING', 'PAID'] } },
+      select: { id: true, orderNumber: true, submissionKey: true },
+    });
+    if (existingByFingerprint) {
+      const existingCredential = deriveLookupCredential(existingByFingerprint.submissionKey);
+      return { orderId: existingByFingerprint.id, orderNumber: existingByFingerprint.orderNumber, credential: existingCredential, replay: true };
+    }
+  }
+
   // Idempotent replay fast-path: a submission key that already created an order
   // returns it (with the same derived credential) without touching the insert.
   const already = await prisma.order.findUnique({
@@ -269,6 +293,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
         countryCode: input.countryCode,
         lookupHash,
         submissionKey: input.submissionKey,
+        cartFingerprint: fingerprint,
         gateway: 'simulated',
         providerIntentId,
         lines: {
@@ -296,13 +321,26 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
       // (`orderNumber`, `providerIntentId`) cannot realistically collide, so
       // this is an idempotent replay that raced the fast-path read: resolve the
       // existing order by this submission key and return it (with the same
-      // derived credential).
+      // derived credential). The partial unique on cartFingerprint (PENDING/PAID)
+      // can also race: two tabs with different submissionKeys but same
+      // cartFingerprint both pass the fast-path, the second hits the partial
+      // unique and must replay the first order (with that order's credential).
       const existing = await prisma.order.findUnique({
         where: { submissionKey: input.submissionKey },
         select: { id: true, orderNumber: true },
       });
       if (existing) {
         return { orderId: existing.id, orderNumber: existing.orderNumber, credential, replay: true };
+      }
+      if (fingerprint) {
+        const existingByFingerprint = await prisma.order.findFirst({
+          where: { cartFingerprint: fingerprint, status: { in: ['PENDING', 'PAID'] } },
+          select: { id: true, orderNumber: true, submissionKey: true },
+        });
+        if (existingByFingerprint) {
+          const existingCredential = deriveLookupCredential(existingByFingerprint.submissionKey);
+          return { orderId: existingByFingerprint.id, orderNumber: existingByFingerprint.orderNumber, credential: existingCredential, replay: true };
+        }
       }
     }
     throw error;
