@@ -125,6 +125,30 @@ export type CompletePaymentResult =
   | { ok: true; status: OrderView['status']; order: OrderView; credential: string }
   | { ok: false; code: 'not-found' | 'unexpected' };
 
+/** Cookie that records which PAID orders have already cleared their purchased
+ * cart lines. The cart cleanup is idempotent: once an order's lines have been
+ * removed, revisiting a stale payment page with the SAME credential must never
+ * delete a NEW cart item that happens to share the SKU (replay finding
+ * d530bb5→f0019aa). The marker is a JSON array of orderIds, kept as a
+ * `lax` cookie with the same lifetime as the cart. */
+const PAID_CART_CLEANUP_COOKIE = 'shanyin_paid_cleanup';
+
+function parsePaidCleanupMarker(raw: string | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const decoded = decodeURIComponent(raw);
+    const parsed = JSON.parse(decoded);
+    if (Array.isArray(parsed)) return parsed.filter((v): v is string => typeof v === 'string');
+  } catch {
+    // malformed marker → treat as empty and overwrite on next write
+  }
+  return [];
+}
+
+function serializePaidCleanupMarker(ids: string[]): string {
+  return encodeURIComponent(JSON.stringify(ids));
+}
+
 /**
  * Drive the deterministic simulated gateway for a PENDING order and process its
  * SIGNED event through the replay-safe pipeline. Idempotent: re-invoking with
@@ -144,7 +168,9 @@ export type CompletePaymentResult =
  * cannot be silently overwritten by a blind whole-cookie delete. A re-entrant
  * call after a lost response (whose Set-Cookie never reached the browser)
  * still removes the purchased lines and can never leave them for a duplicate
- * checkout.
+ * checkout. An idempotent cleanup marker plus the cart line identity
+ * (`addedAt`) ensures a later same-SKU purchase is never mistaken for the
+ * previous order's line.
  */
 export async function completePayment(credential: string, locale: LocaleId): Promise<CompletePaymentResult> {
   try {
@@ -180,9 +206,18 @@ export async function completePayment(credential: string, locale: LocaleId): Pro
     // concurrently in another tab are preserved. This is the server side of
     // the race fix; the client side serializes the whole round trip through
     // `withCartLock` so the request's cookie snapshot already includes any
-    // committed cart mutation.
+    // committed cart mutation. Idempotency across purchase generations: once an
+    // order has been cleaned, a fresh cart item that shares the SKU (added
+    // after the original payment) must be preserved — enforced by a persistent
+    // cleanup marker and by binding to the cart line identity (`addedAt`).
     if (order.status === 'PAID') {
       const store = await cookies();
+      const markerRaw = store.get(PAID_CART_CLEANUP_COOKIE)?.value;
+      const cleanedIds = parsePaidCleanupMarker(markerRaw);
+      if (cleanedIds.includes(order.orderId)) {
+        return { ok: true, status: order.status, order, credential };
+      }
+
       const raw = store.get(CART_COOKIE)?.value;
       const cartState = parseCart(raw);
       if (cartState.status === 'ok' && cartState.items.length > 0) {
@@ -192,8 +227,18 @@ export async function completePayment(credential: string, locale: LocaleId): Pro
         }
         const hasPurchasedInCart = cartState.items.some((item) => purchasedQtyBySku.has(item.sku));
         if (hasPurchasedInCart) {
+          const cutoffMs = order.paidAt ? new Date(order.paidAt).getTime() : new Date(order.createdAt).getTime();
           const remaining: CartItem[] = [];
           for (const item of cartState.items) {
+            // A cart line created AFTER the order was paid is a NEW shopping
+            // generation (e.g. shopper re-added the same SKU after the first
+            // purchase cleared the cart). It must never be treated as the old
+            // purchased line, even though the SKU matches — the `addedAt`
+            // identity binds the cleanup to the original generation.
+            if (Number.isFinite(item.addedAt) && Number.isFinite(cutoffMs) && item.addedAt > cutoffMs) {
+              remaining.push(item);
+              continue;
+            }
             const purchasedQty = purchasedQtyBySku.get(item.sku);
             if (purchasedQty === undefined) {
               remaining.push(item);
@@ -203,19 +248,36 @@ export async function completePayment(credential: string, locale: LocaleId): Pro
                 remaining.push({ ...item, qty: remainder });
               }
               // fully purchased → drop; remainder >0 → keep the uncovered qty
+              // (concurrent add while payment was in flight)
             }
           }
-          if (remaining.length === 0) {
-            store.delete(CART_COOKIE);
-          } else {
-            store.set(CART_COOKIE, serializeCart(remaining), {
-              path: '/',
-              maxAge: CART_MAX_AGE_SECONDS,
-              sameSite: 'lax',
-            });
+          const didChange =
+            remaining.length !== cartState.items.length ||
+            remaining.some((r, i) => r.sku !== cartState.items[i]?.sku || r.qty !== cartState.items[i]?.qty);
+          if (didChange) {
+            if (remaining.length === 0) {
+              store.delete(CART_COOKIE);
+            } else {
+              store.set(CART_COOKIE, serializeCart(remaining), {
+                path: '/',
+                maxAge: CART_MAX_AGE_SECONDS,
+                sameSite: 'lax',
+              });
+            }
           }
         }
       }
+
+      // Persist the idempotent marker so ANY later replay with the same PAID
+      // order credential — including a stale payment page still holding the
+      // old credential after the shopper started a new cart generation — does
+      // not re-apply the SKU-based subtraction to new items.
+      const nextCleaned = [...new Set([...cleanedIds, order.orderId])].slice(-20);
+      store.set(PAID_CART_CLEANUP_COOKIE, serializePaidCleanupMarker(nextCleaned), {
+        path: '/',
+        maxAge: CART_MAX_AGE_SECONDS,
+        sameSite: 'lax',
+      });
     }
 
     return { ok: true, status: order.status, order, credential };

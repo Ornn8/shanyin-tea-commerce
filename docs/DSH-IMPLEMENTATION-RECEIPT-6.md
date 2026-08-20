@@ -248,6 +248,34 @@ With this repair the local verification reran clean on the new diff:
 available — plus the per-locale checkout Playwright journeys and recovery
 journeys.
 
+### Round 4 (exact head `f0019aa`)
+
+One P1 checkout-recovery finding from the exact-head review was fixed without
+changing the public UI:
+
+1. **Paid order replay must not delete a new same-SKU cart item.** Finding:
+   `completePayment` (`src/lib/checkout-actions.ts:201`) subtracted the paid
+   quantity solely by SKU. After the original paid completion cleared the cart,
+   a shopper could add that SKU again; revisiting a stale payment page with the
+   retained order credential treated the new item as the old purchased line and
+   removed it. The `withCartLock` serialization alone cannot distinguish purchase
+   generations. Fix: `completePayment` now persists an idempotent cleanup
+   marker (`shanyin_paid_cleanup` cookie, JSON array of cleaned orderIds) and
+   binds removal to the cart line identity (`CartItem.addedAt` vs.
+   `Order.paidAt`). Once an order's lines have been cleared, any later replay
+   with the same PAID credential skips the SKU-based subtraction entirely,
+   and a cart line whose `addedAt` is after the order's `paidAt` is treated as
+   a NEW shopping generation and preserved (quantity-aware remainder still
+   handled for the concurrent-add-while-in-flight case). Covered by `pnpm
+   i18n:check` / `pnpm lint` / `pnpm typecheck` / `pnpm build` and the
+   existing 132 unit tests; manual verification of the replay-after-re-add
+   ordering.
+
+With this repair the local verification reran clean on the new diff:
+`pnpm i18n:check`, `pnpm lint`, `pnpm typecheck`, `pnpm build`, and
+`pnpm test` — unit suites pass — plus the per-locale checkout Playwright
+journeys.
+
 ## Security hardening (design notes)
 
 - The lookup credential is stored only as a SHA-256 hash: a database leak is

@@ -117,9 +117,15 @@ and local-viewing is locale-driven presentation over the stored snapshots.
   shared `withCartLock` (Web Locks, `src/lib/cart-lock.ts`) and the server
   matches current cart items to the paid order's lines (quantity-aware) so no
   tab's cart mutation is silently dropped or resurrected by response ordering.
-  A failed payment keeps the cart for retry AND releases the submission key so
-  the retry creates a fresh order. A replayed form submission returns the
-  existing order (idempotent), so a double-click can never create two orders.
+  The cleanup is idempotent across purchase generations: once an order's lines
+  have been cleared, a later replay with the same PAID credential never deletes
+  a NEW cart item that happens to share the SKU — enforced by a persistent
+  `shanyin_paid_cleanup` marker cookie (the set of cleaned orderIds) and by
+  binding the removal to the cart line identity (`CartItem.addedAt` vs.
+  `Order.paidAt`). A failed payment keeps the cart for retry AND releases the
+  submission key so the retry creates a fresh order. A replayed form submission
+  returns the existing order (idempotent), so a double-click can never create
+  two orders.
 - CI stays fully deterministic: the simulated gateway always emits a `succeeded`
   event in the happy path, and the integration suite drives `failed`/`expired`/
   `cancelled`/`refunded` plus duplicates and reordering through the same
