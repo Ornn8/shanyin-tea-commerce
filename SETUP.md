@@ -43,12 +43,13 @@ gitignored. In CI the same value is provided as a workflow environment variable.
 New in Issue #3 (`ADR-0005`): `.env` also carries the merchant administrator
 credentials and the session secret:
 
-| Variable         | Purpose                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `ADMIN_EMAIL`    | The single allowlisted merchant administrator email (seeded)        |
-| `ADMIN_PASSWORD` | Password hashed (scrypt) into the seeded `credential` account       |
-| `AUTH_SECRET`    | Signs the admin session cookie (long, random value in production)   |
-| `BETTER_AUTH_URL`| Optional public origin used by better-auth (default `http://localhost:3000`) |
+| Variable          | Purpose                                                             |
+| ----------------- | ------------------------------------------------------------------- |
+| `ADMIN_EMAIL`     | The single allowlisted merchant administrator email (seeded)         |
+| `ADMIN_PASSWORD`  | Password hashed (scrypt) into the seeded `credential` account        |
+| `AUTH_SECRET`     | Signs the admin session cookie (long, random value in production)    |
+| `CART_SECRET`     | Signs the anonymous cart cookie (Issue #5, ADR-0007); falls back to `AUTH_SECRET` locally |
+| `BETTER_AUTH_URL` | Optional public origin used by better-auth (default `http://localhost:3000`) |
 
 New in Issue #4 (`ADR-0006`): the public origin used to build canonical
 links, hreflang alternates, and JSON-LD URLs:
@@ -114,10 +115,18 @@ integration suite (`tests/integration/product-detail.test.ts`) covers variant or
 English-fallback brewing guidance, language-neutral identity stability, published-only
 recommendations, and per-SKU cart lines (ADR-0006). The e2e merchant journeys sign in with
 `ADMIN_EMAIL` / `ADMIN_PASSWORD` and cover sign-in → create → localize → publish → inventory
-adjustment → sign-out at desktop (1440×900) and mobile (390×844) widths, and the
+adjustment → sign-out at desktop (1440×900) and mobile (390×844) widths, the
 product-detail journeys (`e2e/product-detail.spec.ts`) cover variant selection, low-stock,
 unavailable defaults, invalid slugs, locale switching, structured data, and accessibility for
-the same two viewports.
+the same two viewports, and the cart journeys (`e2e/cart.spec.ts`) cover one full add-to-cart
+path per locale (quantities, subtotal, the non-binding shipping estimate, recovery across
+refresh and locale switch), server revalidation (concurrent stock change, price change,
+unpublish removal), a stock-capped add reporting the shortage instead of a false success, the
+expired-cart notice, and keyboard/live-region/focus behavior with long labels (Issue #5,
+ADR-0007). The cart unit suite (`tests/unit/cart.test.ts`) covers the signed cookie model
+(tamper/expiry) and shipping boundaries; `tests/integration/cart.test.ts` covers revalidation
+and the bounded, atomic service mutations — including an add that cannot grow the line
+reporting `insufficient-stock` rather than a false success.
 
 Playwright writes screenshots to `e2e/screenshots/<project>/<locale>-*.png` and, in CI, a
 `commit.txt` with the exact tested commit. Artifacts are uploaded by the `CI` workflow
