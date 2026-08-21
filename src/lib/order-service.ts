@@ -263,6 +263,28 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
       const existingCredential = deriveLookupCredential(existingByFingerprint.submissionKey);
       return { orderId: existingByFingerprint.id, orderNumber: existingByFingerprint.orderNumber, credential: existingCredential, replay: true };
     }
+    // Fingerprint-exact miss but cart still contains a purchased generation:
+    // adding a SKU or changing quantity mutates the whole-cookie hash while
+    // existing lines retain the same addedAt. Prevent a second PENDING order
+    // with overlapping lines that could both become PAID (review 8783066 P1 #1).
+    // This mirrors the checkout-actions fallback and is gated on fingerprint
+    // presence so integration tests that create distinct orders without a
+    // fingerprint (same addedAt, different submission keys) remain distinct.
+    if (input.lines.length > 0) {
+      const addedAts = input.lines.map((l) => BigInt(l.addedAt));
+      const overlapping = await prisma.order.findFirst({
+        where: {
+          status: { in: ['PENDING', 'PAID'] },
+          lines: { some: { sourceAddedAt: { in: addedAts } } },
+        },
+        select: { id: true, orderNumber: true, submissionKey: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (overlapping) {
+        const existingCredential = deriveLookupCredential(overlapping.submissionKey);
+        return { orderId: overlapping.id, orderNumber: overlapping.orderNumber, credential: existingCredential, replay: true };
+      }
+    }
   }
 
   // Idempotent replay fast-path: a submission key that already created an order

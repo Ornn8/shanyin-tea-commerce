@@ -95,7 +95,15 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
     //     Two tabs sharing the same cart but generating different
     //     sessionStorage submissionKeys must not create two orders that can both
     //     become PAID when inventory remains. Enforced on the server via the
-    //     stored cartFingerprint (review finding d49e4cb P1 #1).
+    //     stored cartFingerprint (review finding d49e4cb P1 #1). The fingerprint
+    //     alone is brittle: adding a SKU or changing a quantity changes the
+    //     fingerprint while existing lines retain the same addedAt identities, so
+    //     a second tab could create another PENDING order with overlapping lines
+    //     and both could reach PAID. The stored fingerprint check is kept for the
+    //     exact-match fast path, but a fallback via purchased line identity
+    //     (OrderLine.sourceAddedAt vs CartItem.addedAt) is required so a cart
+    //     mutation does not lose recovery of a PAID order whose response was lost
+    //     and whose lines remain in the cart (review finding 8783066 P1 #1).
     const cartFingerprint = createHash('sha256').update(rawCart ?? '').digest('hex').slice(0, 16);
     const existingByFp = await prisma.order.findFirst({
       where: { cartFingerprint, status: { in: ['PENDING', 'PAID'] } },
@@ -111,6 +119,35 @@ export async function createCheckout(formData: FormData): Promise<CreateCheckout
         credential,
         totalCents: existingByFp.totalCents,
       };
+    }
+    // Fallback: detect any PENDING/PAID order whose purchased line identity
+    // overlaps the current cart. If the PAID response carrying cart cleanup was
+    // lost, the shopper's cart still holds the purchased generation (same
+    // sourceAddedAt); a subsequent checkout with a mutated cart (new SKU or qty)
+    // produces a new fingerprint but must not create a duplicate order that
+    // would double-decrement overlapping inventory. Matching on sourceAddedAt
+    // is generation-exact, unlike a whole-cookie hash.
+    if (state.items.length > 0) {
+      const cartAddedAts = state.items.map((it) => BigInt(it.addedAt));
+      const overlapping = await prisma.order.findFirst({
+        where: {
+          status: { in: ['PENDING', 'PAID'] },
+          lines: { some: { sourceAddedAt: { in: cartAddedAts } } },
+        },
+        select: { id: true, orderNumber: true, submissionKey: true, totalCents: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (overlapping) {
+        const credential = deriveLookupCredential(overlapping.submissionKey);
+        return {
+          ok: true,
+          replay: true,
+          checkoutId: overlapping.id,
+          orderNumber: overlapping.orderNumber,
+          credential,
+          totalCents: overlapping.totalCents,
+        };
+      }
     }
 
     // 2. Validate the minimum contact + shipping fields server-side.

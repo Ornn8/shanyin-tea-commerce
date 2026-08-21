@@ -110,6 +110,7 @@ export async function seedRecoveryOrder(input: {
   status: 'PENDING' | 'PAID';
   submissionKey: string;
   qty: number;
+  sourceAddedAt?: number | null;
 }): Promise<SeededRecoveryOrder> {
   const prisma = db();
   const credential = randomBytes(32).toString('base64url');
@@ -147,6 +148,7 @@ export async function seedRecoveryOrder(input: {
             quantity: input.qty,
             subtotalCents: subtotal,
             currency: 'CNY',
+            sourceAddedAt: input.sourceAddedAt != null ? BigInt(input.sourceAddedAt) : null,
           },
         ],
       },

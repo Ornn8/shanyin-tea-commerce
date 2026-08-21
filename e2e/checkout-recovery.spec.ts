@@ -113,16 +113,39 @@ test.describe('checkout recovery (review findings #2/#3)', () => {
 
   test('re-entering payment on an already-PAID order still clears the purchased cart lines', async ({ page }) => {
     // Simulate the "first paid response was lost": the order committed PAID,
-    // but the browser kept the purchased line in its cart.
+    // but the browser kept the purchased line in its cart. The purchased
+    // generation must be modeled with a matching sourceAddedAt so the PAID
+    // cleanup's exact-identity match (OrderLine.sourceAddedAt vs
+    // CartItem.addedAt) can identify it — otherwise the legacy fallback
+    // (addedAt > createdAt) would preserve a line added before the seeded
+    // order's createdAt and the zero-count assertion cannot be satisfied
+    // (review finding 8783066 P1 #2).
+    await page.goto(`/en/products/${RECOVERY_SLUG}`);
+    await page.getByTestId('add-to-cart').click();
+    await expect(page.getByTestId('cart-count')).toHaveText('1');
+
+    // Capture the cart line's addedAt from the signed cookie so the seeded
+    // PAID order models the exact purchased generation.
+    const cartValue = (await page.context().cookies()).find((c) => c.name === 'shanyin_cart')?.value ?? '';
+    let sourceAddedAt: number | undefined;
+    try {
+      const decoded = decodeURIComponent(cartValue);
+      const parsed = JSON.parse(decoded) as { items?: Array<{ addedAt?: number }> };
+      sourceAddedAt = parsed.items?.[0]?.addedAt;
+    } catch {
+      try {
+        const parsed = JSON.parse(cartValue) as { items?: Array<{ addedAt?: number }> };
+        sourceAddedAt = parsed.items?.[0]?.addedAt;
+      } catch {
+        sourceAddedAt = undefined;
+      }
+    }
     const seeded = await seedRecoveryOrder({
       status: 'PAID',
       submissionKey: 'e2e-recovery-submission-2',
       qty: 1,
+      sourceAddedAt: sourceAddedAt ?? null,
     });
-
-    await page.goto(`/en/products/${RECOVERY_SLUG}`);
-    await page.getByTestId('add-to-cart').click();
-    await expect(page.getByTestId('cart-count')).toHaveText('1');
 
     // Seed only the ticket; the shopper re-enters the payment step with the
     // order already paid.
