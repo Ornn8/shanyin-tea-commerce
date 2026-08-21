@@ -1,4 +1,6 @@
 name: Agent PR Rework
+run-name: >-
+  Agent PR Rework request:${{ github.event_name == 'repository_dispatch' && (github.event.client_payload.request_id || github.event.client_payload.work_request.requestId || 'legacy') || github.run_id }}
 
 # Configure DSH_AUTOMATION_CI_WORKFLOWS before enabling CI repair requests.
 
@@ -6,15 +8,24 @@ on:
   issue_comment:
     types: [created]
   repository_dispatch:
-    types: [dsh-repair, agent_work_requested]
+    types: [dsh-repair, agent_work_requested, agent-review-reconcile]
 
 permissions:
   actions: write
-  contents: read
+  checks: read
+  contents: write
   issues: write
   pull-requests: write
 
+concurrency:
+  group: agent-pr-rework-${{ github.repository }}-${{ github.event_name == 'repository_dispatch' && (github.event.client_payload.request_id || github.event.client_payload.work_request.requestId || github.run_id) || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
+  advancement-repair-reconcile:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'agent-review-reconcile'
+    uses: Ornn8/dsh-agent-automation/.github/workflows/reconcile-reviews.yml@a7eb3370a86c0d3d68ec241a8e5789a86a1ac2b5
+
   dsh-comment-rework:
     if: >-
       github.event_name == 'issue_comment'
@@ -25,7 +36,7 @@ jobs:
         || startsWith(github.event.comment.body, '@agent ')
         || startsWith(github.event.comment.body, 'agent: ')
         || startsWith(github.event.comment.body, '/automation '))
-    uses: Ornn8/dsh-agent-automation/.github/workflows/wake-rework.yml@8c17a3012560093b8afae08e128ef29cf3f1256f
+    uses: Ornn8/dsh-agent-automation/.github/workflows/wake-rework.yml@a7eb3370a86c0d3d68ec241a8e5789a86a1ac2b5
     with:
       pull_request_number: ${{ github.event.issue.number }}
       comment_id: ${{ github.event.comment.id }}
@@ -37,14 +48,13 @@ jobs:
         || (github.event.action == 'agent_work_requested'
           && github.event.client_payload.work_request.version == 2
           && github.event.client_payload.work_request.role == 'change'
-          && github.event.client_payload.work_request.workflowId == 'repair'
-          && github.event.client_payload.work_request.stageId == 'change'
           && github.event.client_payload.work_request.repository == github.repository
           && github.event.client_payload.work_request.subject.type == 'pull-request'))
-    uses: Ornn8/dsh-agent-automation/.github/workflows/dsh-repair.yml@8c17a3012560093b8afae08e128ef29cf3f1256f
+    uses: Ornn8/dsh-agent-automation/.github/workflows/dsh-repair.yml@a7eb3370a86c0d3d68ec241a8e5789a86a1ac2b5
     with:
       pull_request_number: ${{ github.event.action == 'agent_work_requested' && github.event.client_payload.work_request.subject.number || github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.action == 'agent_work_requested' && github.event.client_payload.work_request.revision.head || github.event.client_payload.head_sha }}
       request_id: ${{ github.event.action == 'agent_work_requested' && github.event.client_payload.work_request.requestId || github.event.client_payload.request_id }}
       ci_workflow_name: ${{ github.event.client_payload.ci_workflow_name || '' }}
+      repair_cause: ${{ github.event.client_payload.repair_cause || '' }}
       work_request: ${{ github.event.action == 'agent_work_requested' && toJSON(github.event.client_payload.work_request) || '' }}
