@@ -11,16 +11,16 @@ permissions:
   actions: write
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   dsh-ci-repair:
     if: >-
       contains(fromJSON(vars.DSH_AUTOMATION_CI_WORKFLOWS), github.event.workflow_run.name)
       && github.event.workflow_run.conclusion == 'failure'
-    uses: Ornn8/dsh-agent-automation/.github/workflows/dsh-repair.yml@8c17a3012560093b8afae08e128ef29cf3f1256f
+    uses: Ornn8/dsh-agent-automation/.github/workflows/dsh-repair.yml@a7eb3370a86c0d3d68ec241a8e5789a86a1ac2b5
     with:
-      pull_request_number: ${{ github.event.workflow_run.pull_requests[0].number || 0 }}
+      pull_request_number: 0
       head_sha: ${{ github.event.workflow_run.head_sha }}
       request_id: ${{ format('ci-run-{0}-{1}', github.event.workflow_run.id, github.event.workflow_run.run_attempt) }}
       ci_workflow_name: ${{ github.event.workflow_run.name }}
